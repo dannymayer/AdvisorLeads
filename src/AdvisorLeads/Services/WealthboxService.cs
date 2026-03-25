@@ -12,17 +12,26 @@ namespace AdvisorLeads.Services;
 /// </summary>
 public class WealthboxService
 {
-    private readonly HttpClient _http;
+    // Static shared client - auth token is passed per-request to support token changes.
+    private static readonly HttpClient _http = new HttpClient
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+
+    private readonly string _accessToken;
     private const string BaseUrl = "https://api.crmworkspace.com/v1";
 
     public WealthboxService(string accessToken)
     {
-        _http = new HttpClient();
-        _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", accessToken);
-        _http.DefaultRequestHeaders.Accept.Add(
-            new MediaTypeWithQualityHeaderValue("application/json"));
-        _http.Timeout = TimeSpan.FromSeconds(30);
+        _accessToken = accessToken;
+    }
+
+    private HttpRequestMessage CreateRequest(HttpMethod method, string url)
+    {
+        var request = new HttpRequestMessage(method, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        return request;
     }
 
     /// <summary>
@@ -36,7 +45,7 @@ public class WealthboxService
         // Build contact payload
         var contact = BuildContactPayload(advisor);
         var json = JsonConvert.SerializeObject(contact);
-        var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        var jsonContent = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
 
         try
         {
@@ -51,13 +60,17 @@ public class WealthboxService
             if (existingId != null)
             {
                 // Update existing
-                response = await _http.PutAsync($"{BaseUrl}/contacts/{existingId}", content);
+                var req = CreateRequest(HttpMethod.Put, $"{BaseUrl}/contacts/{existingId}");
+                req.Content = jsonContent;
+                response = await _http.SendAsync(req);
                 progress?.Report($"Updated Wealthbox contact {existingId}.");
             }
             else
             {
                 // Create new
-                response = await _http.PostAsync($"{BaseUrl}/contacts", content);
+                var req = CreateRequest(HttpMethod.Post, $"{BaseUrl}/contacts");
+                req.Content = jsonContent;
+                response = await _http.SendAsync(req);
             }
 
             if (!response.IsSuccessStatusCode)
@@ -114,7 +127,8 @@ public class WealthboxService
     {
         try
         {
-            var response = await _http.GetAsync($"{BaseUrl}/users/me");
+            var req = CreateRequest(HttpMethod.Get, $"{BaseUrl}/users/me");
+            var response = await _http.SendAsync(req);
             return response.IsSuccessStatusCode;
         }
         catch

@@ -11,18 +11,20 @@ namespace AdvisorLeads.Services;
 /// </summary>
 public class FinraService
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = CreateHttpClient();
+
+    private static HttpClient CreateHttpClient()
+    {
+        var client = new HttpClient();
+        client.DefaultRequestHeaders.Add("User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+        client.DefaultRequestHeaders.Add("Accept", "application/json");
+        client.Timeout = TimeSpan.FromSeconds(30);
+        return client;
+    }
+
     private const string SearchUrl = "https://efts.finra.org/EFTS/v2/search-index";
     private const string DetailUrl = "https://api.brokercheck.finra.org/search/individual";
-
-    public FinraService()
-    {
-        _http = new HttpClient();
-        _http.DefaultRequestHeaders.Add("User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-        _http.DefaultRequestHeaders.Add("Accept", "application/json");
-        _http.Timeout = TimeSpan.FromSeconds(30);
-    }
 
     public async Task<List<Advisor>> SearchAdvisorsAsync(string query, string? state = null,
         int from = 0, int size = 12, IProgress<string>? progress = null)
