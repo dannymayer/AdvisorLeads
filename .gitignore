@@ -1,0 +1,20 @@
+# Build artifacts
+**/bin/
+**/obj/
+*.user
+
+# Package cache
+.nuget/
+
+# IDE
+.vs/
+*.suo
+*.user
+.idea/
+
+# Rider
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
