@@ -1,0 +1,40 @@
+name: CI Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore AdvisorLeads.slnx
+
+    - name: Build
+      run: dotnet build AdvisorLeads.slnx --configuration Release --no-restore
+
+    - name: Test publish
+      run: |
+        dotnet publish src/AdvisorLeads/AdvisorLeads.csproj `
+          --configuration Release `
+          --runtime win-x64 `
+          --self-contained true `
+          --output publish/test `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:EnableCompressionInSingleFile=true `
+          --no-build
