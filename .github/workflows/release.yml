@@ -1,0 +1,84 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for release'
+        required: true
+        default: 'v0.0.0'
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore AdvisorLeads.slnx
+
+    - name: Build
+      run: dotnet build AdvisorLeads.slnx --configuration Release --no-restore
+
+    - name: Publish self-contained executable
+      run: |
+        dotnet publish src/AdvisorLeads/AdvisorLeads.csproj `
+          --configuration Release `
+          --runtime win-x64 `
+          --self-contained true `
+          --output publish/win-x64 `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:EnableCompressionInSingleFile=true
+
+    - name: Create release archive
+      run: |
+        Compress-Archive -Path publish/win-x64/* -DestinationPath AdvisorLeads-win-x64.zip
+
+    - name: Get tag name
+      id: tag_name
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "TAG_NAME=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+        else
+          echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.tag_name.outputs.TAG_NAME }}
+        name: Release ${{ steps.tag_name.outputs.TAG_NAME }}
+        draft: false
+        prerelease: false
+        files: |
+          AdvisorLeads-win-x64.zip
+        body: |
+          ## AdvisorLeads Release ${{ steps.tag_name.outputs.TAG_NAME }}
+
+          ### Download
+          Download the `AdvisorLeads-win-x64.zip` file below and extract it to use the application.
+
+          ### Requirements
+          - Windows 10 or later (x64)
+          - The application is self-contained and does not require .NET to be installed
+
+          ### Installation
+          1. Download and extract the zip file
+          2. Run AdvisorLeads.exe
+
+          ### Data Storage
+          The application stores data in: `%APPDATA%/AdvisorLeads/`
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
