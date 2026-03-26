@@ -36,5 +36,4 @@ jobs:
           --output publish/test `
           -p:PublishSingleFile=true `
           -p:IncludeNativeLibrariesForSelfExtract=true `
-          -p:EnableCompressionInSingleFile=true `
-          --no-build
+          -p:EnableCompressionInSingleFile=true

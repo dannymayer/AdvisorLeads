@@ -10,6 +10,7 @@
     <AssemblyName>AdvisorLeads</AssemblyName>
     <RootNamespace>AdvisorLeads</RootNamespace>
     <Platforms>AnyCPU;x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <Version>1.0.0</Version>
     <AssemblyVersion>1.0.0</AssemblyVersion>
     <FileVersion>1.0.0</FileVersion>
