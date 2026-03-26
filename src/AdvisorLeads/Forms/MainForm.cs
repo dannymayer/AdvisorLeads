@@ -14,7 +14,8 @@ public class MainForm : Form
     private DatabaseContext _db = null!;
     private AdvisorRepository _repo = null!;
     private FinraService _finra = null!;
-    private SecIapdService _sec = null!;
+    private SecIapdService _secStub = null!;
+    private SecCompilationService _sec = null!;
     private DataSyncService _sync = null!;
     private BackgroundDataService _bgData = null!;
     private WealthboxService? _wealthbox;
@@ -56,9 +57,10 @@ public class MainForm : Form
         _db.InitializeDatabase();
         _repo = new AdvisorRepository(_db);
         _finra = new FinraService();
-        _sec = new SecIapdService();
-        _sync = new DataSyncService(_finra, _sec, _repo);
-        _bgData = new BackgroundDataService(_finra, _repo);
+        _secStub = new SecIapdService();
+        _sec = new SecCompilationService();
+        _sync = new DataSyncService(_finra, _secStub, _repo);
+        _bgData = new BackgroundDataService(_finra, _sec, _repo);
         _bgData.DataUpdated += OnBackgroundDataUpdated;
 
         // Load saved Wealthbox token
