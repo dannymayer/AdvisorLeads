@@ -7,12 +7,16 @@ namespace AdvisorLeads.Forms;
 
 public class MainForm : Form
 {
+    private const int MainSplitDefaultDistance = 220;
+    private const int ContentSplitDefaultDistance = 420;
+
     // Services
     private DatabaseContext _db = null!;
     private AdvisorRepository _repo = null!;
     private FinraService _finra = null!;
     private SecIapdService _sec = null!;
     private DataSyncService _sync = null!;
+    private BackgroundDataService _bgData = null!;
     private WealthboxService? _wealthbox;
     private string _wealthboxToken = string.Empty;
 
@@ -37,6 +41,7 @@ public class MainForm : Form
         BuildUI();
         LoadAdvisors();
         LoadFilterOptions();
+        this.Shown += OnFormShown;
     }
 
     private void InitializeServices()
@@ -53,6 +58,8 @@ public class MainForm : Form
         _finra = new FinraService();
         _sec = new SecIapdService();
         _sync = new DataSyncService(_finra, _sec, _repo);
+        _bgData = new BackgroundDataService(_finra, _repo);
+        _bgData.DataUpdated += OnBackgroundDataUpdated;
 
         // Load saved Wealthbox token
         _wealthboxToken = LoadSetting("WealthboxToken") ?? string.Empty;
@@ -84,9 +91,6 @@ public class MainForm : Form
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
-            SplitterDistance = 220,
-            Panel1MinSize = 180,
-            Panel2MinSize = 400,
             FixedPanel = FixedPanel.Panel1
         };
 
@@ -99,9 +103,7 @@ public class MainForm : Form
         _contentSplit = new SplitContainer
         {
             Dock = DockStyle.Fill,
-            Orientation = Orientation.Vertical,
-            SplitterDistance = 420,
-            Panel1MinSize = 280
+            Orientation = Orientation.Vertical
         };
 
         // Results list
@@ -118,6 +120,33 @@ public class MainForm : Form
 
         _mainSplit.Panel2.Controls.Add(_contentSplit);
         this.Controls.Add(_mainSplit);
+        this.Load += (_, _) => ApplyInitialSplitLayout();
+    }
+
+    private void ApplyInitialSplitLayout()
+    {
+        _mainSplit.Panel1MinSize = 180;
+        _mainSplit.Panel2MinSize = 400;
+        _contentSplit.Panel1MinSize = 280;
+
+        SetSafeSplitterDistance(_mainSplit, MainSplitDefaultDistance);
+        SetSafeSplitterDistance(_contentSplit, ContentSplitDefaultDistance);
+    }
+
+    private static void SetSafeSplitterDistance(SplitContainer splitContainer, int preferredDistance)
+    {
+        var maxDistance = splitContainer.Orientation == Orientation.Vertical
+            ? splitContainer.ClientSize.Width - splitContainer.Panel2MinSize - splitContainer.SplitterWidth
+            : splitContainer.ClientSize.Height - splitContainer.Panel2MinSize - splitContainer.SplitterWidth;
+
+        var minDistance = splitContainer.Panel1MinSize;
+
+        if (maxDistance < minDistance)
+        {
+            return;
+        }
+
+        splitContainer.SplitterDistance = Math.Clamp(preferredDistance, minDistance, maxDistance);
     }
 
     private void BuildMenu()
@@ -261,6 +290,59 @@ public class MainForm : Form
             _filterPanel.PopulateStates(states);
         }
         catch { /* ignore if DB not ready */ }
+    }
+
+    private async void OnFormShown(object? sender, EventArgs e)
+    {
+        if (!_bgData.IsDatabasePopulated())
+        {
+            // First run — show setup dialog while populating the database.
+            using var dlg = new InitialSetupDialog();
+            var cts = new CancellationTokenSource();
+            dlg.SetCancellationToken(cts);
+
+            var progress = new Progress<string>(msg => dlg.SetProgress(msg));
+
+            // Start the data fetch on a background thread, then close the dialog when done.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var count = await _bgData.PopulateInitialDataAsync(progress, cts.Token);
+                    dlg.SetComplete(count);
+                }
+                catch (OperationCanceledException)
+                {
+                    // User chose to skip.
+                }
+                catch (Exception ex)
+                {
+                    if (dlg.IsHandleCreated)
+                        dlg.BeginInvoke(() => dlg.SetProgress($"Error: {ex.Message}. You can fetch data later from Data → Fetch New Data."));
+                }
+            });
+
+            dlg.ShowDialog(this);
+
+            // Reload the UI with whatever data was fetched.
+            LoadAdvisors();
+            LoadFilterOptions();
+        }
+
+        // Start periodic background refresh (every 60 minutes).
+        _bgData.StartBackgroundRefresh(intervalMinutes: 60);
+    }
+
+    private void OnBackgroundDataUpdated()
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(OnBackgroundDataUpdated);
+            return;
+        }
+        LoadAdvisors();
+        LoadFilterOptions();
+        SetStatus("Background data refresh complete.");
     }
 
     private void OnListViewSelectionChanged(object? sender, EventArgs e)
@@ -522,6 +604,7 @@ public class MainForm : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _bgData?.StopBackgroundRefresh();
         _db?.Dispose();
         base.OnFormClosed(e);
     }

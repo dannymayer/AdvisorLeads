@@ -1,13 +1,13 @@
 using System.Net.Http;
-using Newtonsoft.Json;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 using AdvisorLeads.Models;
 
 namespace AdvisorLeads.Services;
 
 /// <summary>
-/// Service for querying FINRA BrokerCheck API.
-/// Docs: https://brokercheck.finra.org/
+/// Fetches individual broker/adviser records from the FINRA BrokerCheck public JSON API.
+/// API base: https://api.brokercheck.finra.org
 /// </summary>
 public class FinraService
 {
@@ -17,225 +17,273 @@ public class FinraService
     {
         var client = new HttpClient();
         client.DefaultRequestHeaders.Add("User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-        client.DefaultRequestHeaders.Add("Accept", "application/json");
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+        client.DefaultRequestHeaders.Add("Accept", "application/json, text/plain, */*");
+        client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+        client.DefaultRequestHeaders.Add("Origin", "https://brokercheck.finra.org");
+        client.DefaultRequestHeaders.Add("Referer", "https://brokercheck.finra.org/");
         client.Timeout = TimeSpan.FromSeconds(30);
         return client;
     }
 
-    private const string SearchUrl = "https://efts.finra.org/EFTS/v2/search-index";
-    private const string DetailUrl = "https://api.brokercheck.finra.org/search/individual";
+    private const string ApiBase = "https://api.brokercheck.finra.org";
 
+    /// <summary>
+    /// Searches FINRA BrokerCheck for individual advisors matching a query.
+    /// </summary>
     public async Task<List<Advisor>> SearchAdvisorsAsync(string query, string? state = null,
         int from = 0, int size = 12, IProgress<string>? progress = null)
     {
-        var url = $"{SearchUrl}?q={Uri.EscapeDataString(query)}&type=Individual&from={from}&size={size}";
-        if (!string.IsNullOrWhiteSpace(state))
-            url += $"&stateOfLicensure={Uri.EscapeDataString(state)}";
-
         progress?.Report($"Searching FINRA for \"{query}\"...");
 
         try
         {
-            var response = await _http.GetStringAsync(url);
-            var json = JObject.Parse(response);
-            var hits = json["hits"]?["hits"] as JArray;
-            if (hits == null) return new List<Advisor>();
+            var url = $"{ApiBase}/search/individual" +
+                      $"?query={Uri.EscapeDataString(query)}" +
+                      $"&hl=true&includePrevious=true" +
+                      $"&nrows={size}&start={from}&r=25&wt=json";
+
+            var json = await _http.GetStringAsync(url);
+            var root = JObject.Parse(json);
+            var hits = root["hits"]?["hits"] as JArray;
+
+            if (hits == null || hits.Count == 0)
+            {
+                progress?.Report($"FINRA: No results found for \"{query}\".");
+                return new List<Advisor>();
+            }
 
             var advisors = new List<Advisor>();
             foreach (var hit in hits)
             {
-                var src = hit["_source"];
-                if (src == null) continue;
-
-                var advisor = ParseSearchHit(src);
+                var advisor = ParseHit(hit);
                 if (advisor != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(state) &&
+                        !string.Equals(advisor.State, state, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
                     advisors.Add(advisor);
+                }
             }
 
-            progress?.Report($"Found {advisors.Count} results from FINRA.");
+            progress?.Report($"✓ Found {advisors.Count} result(s) from FINRA.");
             return advisors;
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex)
         {
             progress?.Report($"FINRA search error: {ex.Message}");
             return new List<Advisor>();
         }
     }
 
+    /// <summary>
+    /// Fetches details for a single advisor by CRD number.
+    /// </summary>
     public async Task<Advisor?> GetAdvisorDetailAsync(string crd, IProgress<string>? progress = null)
     {
-        progress?.Report($"Fetching FINRA details for CRD #{crd}...");
         try
         {
-            var url = $"{DetailUrl}/{crd}?hl=true&includePrevious=true&nrows=12&start=0&wrapup=true";
-            var response = await _http.GetStringAsync(url);
-            var json = JObject.Parse(response);
-            return ParseDetailResponse(json, crd);
+            var url = $"{ApiBase}/search/individual?query={Uri.EscapeDataString(crd)}" +
+                      $"&hl=true&includePrevious=true&nrows=5&start=0&r=25&wt=json";
+            var json = await _http.GetStringAsync(url);
+            var root = JObject.Parse(json);
+            var hits = root["hits"]?["hits"] as JArray;
+
+            if (hits == null || hits.Count == 0)
+                return null;
+
+            // Find the exact CRD match.
+            foreach (var hit in hits)
+            {
+                var src = hit["_source"];
+                if (src == null) continue;
+                if (string.Equals(src["ind_source_id"]?.ToString(), crd, StringComparison.OrdinalIgnoreCase))
+                    return ParseHit(hit);
+            }
+
+            // Fallback to first result.
+            return ParseHit(hits[0]);
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex)
         {
             progress?.Report($"FINRA detail error for CRD {crd}: {ex.Message}");
             return null;
         }
     }
 
-    public async Task<List<Advisor>> SearchByFirmAsync(string firmCrd, IProgress<string>? progress = null)
+    /// <summary>
+    /// Fetches advisors employed at a specific firm.
+    /// </summary>
+    public async Task<List<Advisor>> SearchByFirmAsync(string firmName, IProgress<string>? progress = null)
     {
-        var url = $"{SearchUrl}?q=*&type=Individual&iac={Uri.EscapeDataString(firmCrd)}&from=0&size=50";
-        progress?.Report($"Fetching FINRA advisors for firm CRD {firmCrd}...");
+        return await SearchAdvisorsAsync(firmName, size: 50, progress: progress);
+    }
+
+    /// <summary>
+    /// Fetches a broad batch of advisors for initial database population.
+    /// Uses common last names and state-based queries to pull a diverse set.
+    /// </summary>
+    public async Task<List<Advisor>> FetchBulkAdvisorsAsync(IProgress<string>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var allAdvisors = new Dictionary<string, Advisor>(StringComparer.OrdinalIgnoreCase);
+
+        // Fetch by common last name prefixes to get a diverse dataset.
+        var seeds = new[] { "Smith", "Johnson", "Williams", "Brown", "Jones", "Miller", "Davis",
+                            "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin",
+                            "Lee", "Harris", "Clark", "Lewis", "Robinson", "Walker" };
+
+        int total = seeds.Length;
+        int done = 0;
+
+        foreach (var seed in seeds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                var advisors = await SearchAdvisorsAsync(seed, size: 25, progress: progress);
+                foreach (var a in advisors)
+                {
+                    var key = !string.IsNullOrEmpty(a.CrdNumber) ? a.CrdNumber : $"{a.LastName}:{a.FirstName}";
+                    allAdvisors.TryAdd(key, a);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { /* continue with next seed */ }
+
+            done++;
+            progress?.Report($"Populating database... ({done}/{total} queries, {allAdvisors.Count} advisors found)");
+
+            // Small delay to be respectful to the API.
+            await Task.Delay(300, cancellationToken);
+        }
+
+        return allAdvisors.Values.ToList();
+    }
+
+    private static Advisor? ParseHit(JToken hit)
+    {
         try
         {
-            var response = await _http.GetStringAsync(url);
-            var json = JObject.Parse(response);
-            var hits = json["hits"]?["hits"] as JArray;
-            if (hits == null) return new List<Advisor>();
+            var src = hit["_source"];
+            if (src == null) return null;
 
-            var advisors = new List<Advisor>();
-            foreach (var hit in hits)
+            var crd = src["ind_source_id"]?.ToString() ?? "";
+            var firstName = src["ind_firstname"]?.ToString()?.Trim() ?? "";
+            var lastName = src["ind_lastname"]?.ToString()?.Trim() ?? "";
+            var middleName = src["ind_middlename"]?.ToString()?.Trim();
+
+            if (string.IsNullOrEmpty(firstName) && string.IsNullOrEmpty(lastName))
+                return null;
+
+            var hasDisclosures = string.Equals(
+                src["ind_bc_disclosure_fl"]?.ToString(), "Y", StringComparison.OrdinalIgnoreCase);
+
+            var bcScope = src["ind_bc_scope"]?.ToString() ?? "";
+            var iaScope = src["ind_ia_scope"]?.ToString() ?? "";
+            var regStatus = bcScope;
+            if (!string.IsNullOrEmpty(iaScope) && iaScope != "NotInScope")
+                regStatus = string.IsNullOrEmpty(regStatus) ? iaScope : $"{regStatus}, IA: {iaScope}";
+
+            var industryDate = src["ind_industry_cal_date"]?.ToString();
+            DateTime? registrationDate = null;
+            int? yearsExp = null;
+            if (DateTime.TryParse(industryDate, out var indDate))
             {
-                var src = hit["_source"];
-                if (src == null) continue;
-                var advisor = ParseSearchHit(src);
-                if (advisor != null)
-                    advisors.Add(advisor);
+                registrationDate = indDate;
+                yearsExp = (int)((DateTime.Today - indDate).TotalDays / 365.25);
             }
-            return advisors;
+
+            // Parse current employment from the stringified objects.
+            var currentFirm = "";
+            var currentFirmCrd = "";
+            var currentState = "";
+            var currentCity = "";
+            var currentZip = "";
+            var employmentHistory = new List<EmploymentHistory>();
+
+            var empArray = src["ind_current_employments"] as JArray;
+            if (empArray != null && empArray.Count > 0)
+            {
+                foreach (var emp in empArray)
+                {
+                    var empStr = emp.ToString();
+
+                    var firmName = ExtractField(empStr, "firm_name");
+                    var firmId = ExtractField(empStr, "firm_id");
+                    var branchCity = ExtractField(empStr, "branch_city");
+                    var branchState = ExtractField(empStr, "branch_state");
+                    var branchZip = ExtractField(empStr, "branch_zip");
+                    var iaOnly = ExtractField(empStr, "ia_only");
+
+                    if (string.IsNullOrEmpty(currentFirm) && !string.IsNullOrEmpty(firmName))
+                    {
+                        currentFirm = firmName;
+                        currentFirmCrd = firmId;
+                        currentState = branchState;
+                        currentCity = branchCity;
+                        currentZip = branchZip;
+                    }
+
+                    if (!string.IsNullOrEmpty(firmName) &&
+                        !employmentHistory.Any(e => string.Equals(e.FirmName, firmName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        employmentHistory.Add(new EmploymentHistory
+                        {
+                            FirmName = firmName,
+                            FirmCrd = firmId,
+                            Position = iaOnly == "Y" ? "Investment Adviser Representative" : "Registered Representative"
+                        });
+                    }
+                }
+            }
+
+            var regCount = src["ind_approved_finra_registration_count"]?.Value<int>() ?? 0;
+            var licenses = regCount > 0 ? $"{regCount} active registration(s)" : null;
+
+            return new Advisor
+            {
+                CrdNumber = crd,
+                FirstName = TitleCase(firstName),
+                LastName = TitleCase(lastName),
+                MiddleName = string.IsNullOrWhiteSpace(middleName) ? null : TitleCase(middleName),
+                CurrentFirmName = TitleCase(currentFirm),
+                CurrentFirmCrd = currentFirmCrd,
+                State = currentState,
+                City = TitleCase(currentCity),
+                ZipCode = currentZip,
+                HasDisclosures = hasDisclosures,
+                RegistrationStatus = regStatus,
+                RegistrationDate = registrationDate,
+                YearsOfExperience = yearsExp,
+                Licenses = licenses,
+                Source = "FINRA",
+                EmploymentHistory = employmentHistory
+            };
         }
-        catch (HttpRequestException ex)
+        catch
         {
-            progress?.Report($"FINRA firm search error: {ex.Message}");
-            return new List<Advisor>();
-        }
-    }
-
-    private static Advisor? ParseSearchHit(JToken src)
-    {
-        var firstName = src["ind_firstname"]?.ToString()
-                     ?? src["firstName"]?.ToString()
-                     ?? string.Empty;
-        var lastName = src["ind_lastname"]?.ToString()
-                    ?? src["lastName"]?.ToString()
-                    ?? string.Empty;
-
-        if (string.IsNullOrEmpty(firstName) && string.IsNullOrEmpty(lastName))
             return null;
-
-        var crd = src["ind_source_id"]?.ToString()
-               ?? src["indvlPK"]?.ToString();
-
-        var advisor = new Advisor
-        {
-            CrdNumber = crd,
-            FirstName = firstName,
-            LastName = lastName,
-            RegistrationStatus = src["ind_bc_scope"]?.ToString()
-                              ?? src["registrationStatus"]?.ToString(),
-            CurrentFirmName = src["ind_bc_employerregistrytionname"]?.ToString()
-                           ?? src["currentEmployer"]?.ToString(),
-            CurrentFirmCrd = src["ind_bc_employerregistrycrdnumber"]?.ToString(),
-            State = src["ind_bc_stateoflicensure"]?.ToString(),
-            HasDisclosures = src["ind_bc_disclosurefl"]?.ToString()?.ToUpper() == "Y",
-            Source = "FINRA"
-        };
-
-        return advisor;
+        }
     }
 
-    private static Advisor? ParseDetailResponse(JObject json, string crd)
+    /// <summary>
+    /// Extracts a named field value from the PowerShell-style stringified hashtable
+    /// format returned by FINRA: "@{key=value; key2=value2}"
+    /// </summary>
+    private static string ExtractField(string empStr, string fieldName)
     {
-        var hits = json["hits"]?["hits"] as JArray;
-        JToken? src = null;
-
-        if (hits != null && hits.Count > 0)
-            src = hits[0]["_source"];
-
-        if (src == null)
-        {
-            // Try top-level fields
-            src = json["hits"]?["hits"]?[0]?["_source"] ?? json;
-        }
-
-        var advisor = new Advisor
-        {
-            CrdNumber = crd,
-            FirstName = src["ind_firstname"]?.ToString() ?? string.Empty,
-            LastName = src["ind_lastname"]?.ToString() ?? string.Empty,
-            MiddleName = src["ind_middlename"]?.ToString(),
-            RegistrationStatus = src["ind_bc_scope"]?.ToString(),
-            CurrentFirmName = src["ind_bc_employerregistrytionname"]?.ToString(),
-            CurrentFirmCrd = src["ind_bc_employerregistrycrdnumber"]?.ToString(),
-            State = src["ind_bc_stateoflicensure"]?.ToString(),
-            HasDisclosures = src["ind_bc_disclosurefl"]?.ToString()?.ToUpper() == "Y",
-            Source = "FINRA"
-        };
-
-        // Parse disclosures
-        var disclosures = src["disclosures"] as JArray;
-        if (disclosures != null)
-        {
-            advisor.DisclosureCount = disclosures.Count;
-            foreach (var d in disclosures)
-            {
-                advisor.Disclosures.Add(new Disclosure
-                {
-                    Type = d["disclosureType"]?.ToString() ?? "Unknown",
-                    Description = d["allegedSanctions"]?.ToString() ?? d["description"]?.ToString(),
-                    Date = TryParseDate(d["disclosureDate"]?.ToString()),
-                    Resolution = d["disclosureResolution"]?.ToString(),
-                    Sanctions = d["sanctions"]?.ToString(),
-                    Source = "FINRA"
-                });
-            }
-        }
-
-        // Parse employment history
-        var empHistory = src["registrations"] as JArray ?? src["employmentHistory"] as JArray;
-        if (empHistory != null)
-        {
-            foreach (var e in empHistory)
-            {
-                advisor.EmploymentHistory.Add(new EmploymentHistory
-                {
-                    FirmName = e["orgName"]?.ToString() ?? e["firmName"]?.ToString() ?? "Unknown",
-                    FirmCrd = e["orgPK"]?.ToString() ?? e["firmCrd"]?.ToString(),
-                    StartDate = TryParseDate(e["registrationDate"]?.ToString() ?? e["startDate"]?.ToString()),
-                    EndDate = TryParseDate(e["endDate"]?.ToString()),
-                    Position = e["regCategory"]?.ToString() ?? e["position"]?.ToString()
-                });
-            }
-        }
-
-        // Parse qualifications/exams
-        var exams = src["exams"] as JArray;
-        if (exams != null)
-        {
-            foreach (var exam in exams)
-            {
-                advisor.QualificationList.Add(new Qualification
-                {
-                    Name = exam["examName"]?.ToString() ?? string.Empty,
-                    Code = exam["examCategory"]?.ToString(),
-                    Date = TryParseDate(exam["examDate"]?.ToString()),
-                    Status = exam["examStatus"]?.ToString() ?? "Passed"
-                });
-            }
-        }
-
-        // Build licenses string
-        var licenses = src["ind_bc_licenses"]?.ToString()
-                    ?? string.Join(", ", advisor.QualificationList.Select(q => q.Code ?? q.Name));
-        advisor.Licenses = string.IsNullOrEmpty(licenses) ? null : licenses;
-
-        return advisor;
+        var pattern = $@"{Regex.Escape(fieldName)}=([^;}}]*)";
+        var match = Regex.Match(empStr, pattern, RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups[1].Value.Trim() : "";
     }
 
-    private static DateTime? TryParseDate(string? s)
+    private static string TitleCase(string? value)
     {
-        if (string.IsNullOrWhiteSpace(s)) return null;
-        if (DateTime.TryParse(s, out var dt)) return dt;
-        if (s.Length == 8 && DateTime.TryParseExact(s, "MMddyyyy", null, System.Globalization.DateTimeStyles.None, out var dt2))
-            return dt2;
-        return null;
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(value.ToLower());
     }
 }
+
