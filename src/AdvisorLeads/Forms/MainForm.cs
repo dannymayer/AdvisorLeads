@@ -11,7 +11,6 @@ public class MainForm : Form
     private const int ContentSplitDefaultDistance = 420;
 
     // Services
-    private DatabaseContext _db = null!;
     private AdvisorRepository _repo = null!;
     private FinraService _finra = null!;
     private SecIapdService _secStub = null!;
@@ -23,6 +22,7 @@ public class MainForm : Form
     private WealthboxService? _wealthbox;
     private SecIapdEnrichmentService _iapd = null!;
     private ListRepository _listRepo = null!;
+    private string _dbPath = null!;
     private string _wealthboxToken = string.Empty;
 
     // UI components
@@ -67,10 +67,13 @@ public class MainForm : Form
             "AdvisorLeads");
         Directory.CreateDirectory(appData);
         var dbPath = Path.Combine(appData, "advisorleads.db");
+        _dbPath = dbPath;
 
-        _db = new DatabaseContext(dbPath);
-        _db.InitializeDatabase();
-        _repo = new AdvisorRepository(_db);
+        using (var initDb = new DatabaseContext(dbPath))
+        {
+            initDb.InitializeDatabase();
+        }
+        _repo = new AdvisorRepository(dbPath);
         _finra = new FinraService();
         _secStub = new SecIapdService();
         _sec = new SecCompilationService();
@@ -83,7 +86,7 @@ public class MainForm : Form
         _bgData.SetBrokerProtocolService(_brokerProtocolService);
         _iapd = new SecIapdEnrichmentService(_repo);
         _bgData.SetIapdService(_iapd);
-        _listRepo = new ListRepository(_db);
+        _listRepo = new ListRepository(dbPath);
 
         // Load saved Wealthbox token
         _wealthboxToken = LoadSetting("WealthboxToken") ?? string.Empty;
@@ -830,7 +833,10 @@ public class MainForm : Form
         // Wipe the database and SEC cache.
         await Task.Run(() =>
         {
-            _db.ClearAllData();
+            using (var clearDb = new DatabaseContext(_dbPath))
+            {
+                clearDb.ClearAllData();
+            }
             _sec.ClearCache();
         });
 
@@ -932,7 +938,6 @@ public class MainForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _bgData?.StopBackgroundRefresh();
-        _db?.Dispose();
         base.OnFormClosed(e);
     }
 }
