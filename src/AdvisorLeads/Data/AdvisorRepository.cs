@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+using Npgsql;
 using AdvisorLeads.Models;
 using System.Text;
 
@@ -17,7 +17,7 @@ public class AdvisorRepository
 
     public List<Advisor> GetAdvisors(SearchFilter filter)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         var sb = new StringBuilder(@"
             SELECT Id, CrdNumber, IapdNumber, FirstName, LastName, MiddleName,
                    Title, Email, Phone, City, State, ZipCode, Licenses, Qualifications,
@@ -31,12 +31,12 @@ public class AdvisorRepository
 
         if (!filter.IncludeExcluded)
         {
-            sb.Append(" AND IsExcluded = 0");
+            sb.Append(" AND IsExcluded = FALSE");
         }
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
         {
-            sb.Append(" AND (FirstName LIKE @name OR LastName LIKE @name OR (FirstName || ' ' || LastName) LIKE @name)");
+            sb.Append(" AND (FirstName ILIKE @name OR LastName ILIKE @name OR (FirstName || ' ' || LastName) ILIKE @name)");
             parameters.Add(("@name", $"%{filter.NameQuery}%"));
         }
 
@@ -48,7 +48,7 @@ public class AdvisorRepository
 
         if (!string.IsNullOrWhiteSpace(filter.FirmName))
         {
-            sb.Append(" AND CurrentFirmName LIKE @firmName");
+            sb.Append(" AND CurrentFirmName ILIKE @firmName");
             parameters.Add(("@firmName", $"%{filter.FirmName}%"));
         }
 
@@ -66,27 +66,27 @@ public class AdvisorRepository
 
         if (!string.IsNullOrWhiteSpace(filter.RegistrationStatus))
         {
-            // Use LIKE so "Active" matches "Active", "Inactive" etc. correctly
-            sb.Append(" AND RegistrationStatus LIKE @status");
+            // Use ILIKE so "Active" matches "Active", "Inactive" etc. correctly
+            sb.Append(" AND RegistrationStatus ILIKE @status");
             parameters.Add(("@status", filter.RegistrationStatus));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.LicenseType))
         {
-            sb.Append(" AND Licenses LIKE @license");
+            sb.Append(" AND Licenses ILIKE @license");
             parameters.Add(("@license", $"%{filter.LicenseType}%"));
         }
 
         if (filter.HasDisclosures.HasValue)
         {
             sb.Append(" AND HasDisclosures = @hasDisc");
-            parameters.Add(("@hasDisc", filter.HasDisclosures.Value ? 1 : 0));
+            parameters.Add(("@hasDisc", filter.HasDisclosures.Value));
         }
 
         if (filter.IsImportedToCrm.HasValue)
         {
             sb.Append(" AND IsImportedToCrm = @imported");
-            parameters.Add(("@imported", filter.IsImportedToCrm.Value ? 1 : 0));
+            parameters.Add(("@imported", filter.IsImportedToCrm.Value));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.Source))
@@ -95,11 +95,11 @@ public class AdvisorRepository
             if (filter.Source.Equals("Both", StringComparison.OrdinalIgnoreCase)
                 || filter.Source.Contains(','))
             {
-                sb.Append(" AND Source LIKE '%FINRA%' AND Source LIKE '%SEC%'");
+                sb.Append(" AND Source ILIKE '%FINRA%' AND Source ILIKE '%SEC%'");
             }
             else
             {
-                sb.Append(" AND Source LIKE @source");
+                sb.Append(" AND Source ILIKE @source");
                 parameters.Add(("@source", $"%{filter.Source}%"));
             }
         }
@@ -124,7 +124,7 @@ public class AdvisorRepository
 
         if (!string.IsNullOrWhiteSpace(filter.City))
         {
-            sb.Append(" AND City LIKE @city");
+            sb.Append(" AND City ILIKE @city");
             parameters.Add(("@city", $"%{filter.City}%"));
         }
 
@@ -165,7 +165,7 @@ public class AdvisorRepository
 
     public Advisor? GetAdvisorById(int id)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT Id, CrdNumber, IapdNumber, FirstName, LastName, MiddleName,
@@ -189,7 +189,7 @@ public class AdvisorRepository
 
     public Advisor? GetAdvisorByCrd(string crd)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT Id FROM Advisors WHERE CrdNumber = @crd";
         cmd.Parameters.AddWithValue("@crd", crd);
@@ -201,7 +201,7 @@ public class AdvisorRepository
 
     public int UpsertAdvisor(Advisor advisor)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
 
         // Check for existing by CRD
         int existingId = 0;
@@ -238,7 +238,7 @@ public class AdvisorRepository
 
     private void InsertAdvisor(Advisor a)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             INSERT INTO Advisors (CrdNumber, IapdNumber, FirstName, LastName, MiddleName,
@@ -250,15 +250,15 @@ public class AdvisorRepository
             VALUES (@crd, @iapd, @first, @last, @middle, @title, @email, @phone,
                 @city, @state, @zip, @licenses, @quals, @firmName, @firmCrd, @firmId,
                 @status, @regDate, @years, @discs, @discCount, @source, @recordType,
-                0, NULL, 0, NULL, @suffix, @iapdLink, @regAuths, @discFlags, @otherNames, datetime('now'));
-            SELECT last_insert_rowid();";
+                FALSE, NULL, FALSE, NULL, @suffix, @iapdLink, @regAuths, @discFlags, @otherNames, NOW())
+            RETURNING Id;";
         BindAdvisorParams(cmd, a);
         a.Id = Convert.ToInt32(cmd.ExecuteScalar());
     }
 
     private void UpdateAdvisor(Advisor a)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             UPDATE Advisors SET
@@ -278,14 +278,14 @@ public class AdvisorRepository
                 CurrentFirmCrd      = COALESCE(NULLIF(@firmCrd, ''), CurrentFirmCrd),
                 CurrentFirmId       = COALESCE(@firmId, CurrentFirmId),
                 RegistrationStatus  = COALESCE(NULLIF(@status, ''), RegistrationStatus),
-                RegistrationDate    = COALESCE(NULLIF(@regDate, ''), RegistrationDate),
+                RegistrationDate    = COALESCE(@regDate, RegistrationDate),
                 YearsOfExperience   = COALESCE(@years, YearsOfExperience),
-                HasDisclosures      = MAX(HasDisclosures, @discs),
-                DisclosureCount     = MAX(DisclosureCount, @discCount),
+                HasDisclosures      = GREATEST(HasDisclosures, @discs),
+                DisclosureCount     = GREATEST(DisclosureCount, @discCount),
                 Source              = CASE
                     WHEN @source IS NULL OR @source = '' THEN Source
                     WHEN Source IS NULL OR Source = '' THEN @source
-                    WHEN ',' || Source || ',' LIKE '%,' || @source || ',%' THEN Source
+                    WHEN ',' || Source || ',' ILIKE '%,' || @source || ',%' THEN Source
                     ELSE Source || ',' || @source
                   END,
                 RecordType          = COALESCE(NULLIF(@recordType, ''), RecordType),
@@ -294,14 +294,14 @@ public class AdvisorRepository
                 RegAuthorities      = COALESCE(NULLIF(@regAuths, ''), RegAuthorities),
                 DisclosureFlags     = COALESCE(NULLIF(@discFlags, ''), DisclosureFlags),
                 OtherNames          = COALESCE(NULLIF(@otherNames, ''), OtherNames),
-                UpdatedAt           = datetime('now')
+                UpdatedAt           = NOW()
             WHERE Id = @id";
         BindAdvisorParams(cmd, a);
         cmd.Parameters.AddWithValue("@id", a.Id);
         cmd.ExecuteNonQuery();
     }
 
-    private static void BindAdvisorParams(SqliteCommand cmd, Advisor a)
+    private static void BindAdvisorParams(NpgsqlCommand cmd, Advisor a)
     {
         cmd.Parameters.AddWithValue("@crd", (object?)a.CrdNumber ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@iapd", (object?)a.IapdNumber ?? DBNull.Value);
@@ -320,9 +320,9 @@ public class AdvisorRepository
         cmd.Parameters.AddWithValue("@firmCrd", (object?)a.CurrentFirmCrd ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@firmId", (object?)a.CurrentFirmId ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@status", (object?)a.RegistrationStatus ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@regDate", a.RegistrationDate.HasValue ? a.RegistrationDate.Value.ToString("yyyy-MM-dd") : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@regDate", a.RegistrationDate.HasValue ? a.RegistrationDate.Value : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@years", (object?)a.YearsOfExperience ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@discs", a.HasDisclosures ? 1 : 0);
+        cmd.Parameters.AddWithValue("@discs", a.HasDisclosures);
         cmd.Parameters.AddWithValue("@discCount", a.DisclosureCount);
         cmd.Parameters.AddWithValue("@source", (object?)a.Source ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@recordType", (object?)a.RecordType ?? DBNull.Value);
@@ -335,10 +335,10 @@ public class AdvisorRepository
 
     public void SetAdvisorExcluded(int id, bool excluded, string? reason = null)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE Advisors SET IsExcluded = @excluded, ExclusionReason = @reason, UpdatedAt = datetime('now') WHERE Id = @id";
-        cmd.Parameters.AddWithValue("@excluded", excluded ? 1 : 0);
+        cmd.CommandText = "UPDATE Advisors SET IsExcluded = @excluded, ExclusionReason = @reason, UpdatedAt = NOW() WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@excluded", excluded);
         cmd.Parameters.AddWithValue("@reason", (object?)reason ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@id", id);
         cmd.ExecuteNonQuery();
@@ -346,9 +346,9 @@ public class AdvisorRepository
 
     public void SetAdvisorImported(int id, string? crmId)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE Advisors SET IsImportedToCrm = 1, CrmId = @crmId, UpdatedAt = datetime('now') WHERE Id = @id";
+        cmd.CommandText = "UPDATE Advisors SET IsImportedToCrm = TRUE, CrmId = @crmId, UpdatedAt = NOW() WHERE Id = @id";
         cmd.Parameters.AddWithValue("@crmId", (object?)crmId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@id", id);
         cmd.ExecuteNonQuery();
@@ -356,7 +356,7 @@ public class AdvisorRepository
 
     private void LoadRelatedData(Advisor advisor)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
 
         using var empCmd = conn.CreateCommand();
         empCmd.CommandText = "SELECT Id, AdvisorId, FirmName, FirmCrd, StartDate, EndDate, Position, Street FROM EmploymentHistory WHERE AdvisorId = @id ORDER BY StartDate DESC";
@@ -371,10 +371,10 @@ public class AdvisorRepository
                     AdvisorId = r.GetInt32(1),
                     FirmName = r.GetString(2),
                     FirmCrd = r.IsDBNull(3) ? null : r.GetString(3),
-                    StartDate = r.IsDBNull(4) ? null : DateTime.Parse(r.GetString(4)),
-                    EndDate = r.IsDBNull(5) ? null : DateTime.Parse(r.GetString(5)),
+                    StartDate = r.IsDBNull(4) ? null : r.GetDateTime(4),
+                    EndDate = r.IsDBNull(5) ? null : r.GetDateTime(5),
                     Position = r.IsDBNull(6) ? null : r.GetString(6),
-                    Street = r.FieldCount > 7 && !r.IsDBNull(7) ? r.GetString(7) : null
+                    Street = !r.IsDBNull(7) ? r.GetString(7) : null
                 });
             }
         }
@@ -392,7 +392,7 @@ public class AdvisorRepository
                     AdvisorId = r.GetInt32(1),
                     Type = r.GetString(2),
                     Description = r.IsDBNull(3) ? null : r.GetString(3),
-                    Date = r.IsDBNull(4) ? null : DateTime.Parse(r.GetString(4)),
+                    Date = r.IsDBNull(4) ? null : r.GetDateTime(4),
                     Resolution = r.IsDBNull(5) ? null : r.GetString(5),
                     Sanctions = r.IsDBNull(6) ? null : r.GetString(6),
                     Source = r.IsDBNull(7) ? null : r.GetString(7)
@@ -413,7 +413,7 @@ public class AdvisorRepository
                     AdvisorId = r.GetInt32(1),
                     Name = r.GetString(2),
                     Code = r.IsDBNull(3) ? null : r.GetString(3),
-                    Date = r.IsDBNull(4) ? null : DateTime.Parse(r.GetString(4)),
+                    Date = r.IsDBNull(4) ? null : r.GetDateTime(4),
                     Status = r.IsDBNull(5) ? null : r.GetString(5)
                 });
             }
@@ -422,7 +422,7 @@ public class AdvisorRepository
 
     private void UpsertEmploymentHistory(int advisorId, List<EmploymentHistory> history)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
 
         // Load existing records so we can merge rather than replace
         var existing = new List<(int id, string firmName)>();
@@ -462,10 +462,10 @@ public class AdvisorRepository
                             Street    = COALESCE(@street, Street)
                         WHERE Id = @id";
                     updCmd.Parameters.AddWithValue("@start", hasNewStart
-                        ? h.StartDate!.Value.ToString("yyyy-MM-dd")
+                        ? h.StartDate!.Value
                         : (object)DBNull.Value);
                     updCmd.Parameters.AddWithValue("@end", hasNewEnd
-                        ? h.EndDate!.Value.ToString("yyyy-MM-dd")
+                        ? h.EndDate!.Value
                         : (object)DBNull.Value);
                     updCmd.Parameters.AddWithValue("@pos", hasNewPos ? (object)h.Position! : DBNull.Value);
                     updCmd.Parameters.AddWithValue("@crd", hasNewCrd ? (object)h.FirmCrd! : DBNull.Value);
@@ -484,10 +484,10 @@ public class AdvisorRepository
                 cmd.Parameters.AddWithValue("@firm", h.FirmName);
                 cmd.Parameters.AddWithValue("@crd", (object?)h.FirmCrd ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@start", h.StartDate.HasValue
-                    ? h.StartDate.Value.ToString("yyyy-MM-dd")
+                    ? h.StartDate.Value
                     : (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@end", (h.EndDate.HasValue && h.EndDate.Value != DateTime.MinValue)
-                    ? h.EndDate.Value.ToString("yyyy-MM-dd")
+                    ? h.EndDate.Value
                     : (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@pos", (object?)h.Position ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@street", (object?)h.Street ?? DBNull.Value);
@@ -499,7 +499,7 @@ public class AdvisorRepository
 
     private void UpsertDisclosures(int advisorId, List<Disclosure> disclosures)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var delCmd = conn.CreateCommand();
         delCmd.CommandText = "DELETE FROM Disclosures WHERE AdvisorId = @id";
         delCmd.Parameters.AddWithValue("@id", advisorId);
@@ -514,7 +514,7 @@ public class AdvisorRepository
             cmd.Parameters.AddWithValue("@aid", advisorId);
             cmd.Parameters.AddWithValue("@type", d.Type);
             cmd.Parameters.AddWithValue("@desc", (object?)d.Description ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@date", d.Date.HasValue ? d.Date.Value.ToString("yyyy-MM-dd") : (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("@date", d.Date.HasValue ? d.Date.Value : (object)DBNull.Value);
             cmd.Parameters.AddWithValue("@res", (object?)d.Resolution ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@sanc", (object?)d.Sanctions ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@src", (object?)d.Source ?? DBNull.Value);
@@ -524,7 +524,7 @@ public class AdvisorRepository
 
     private void UpsertQualifications(int advisorId, List<Qualification> qualifications)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var delCmd = conn.CreateCommand();
         delCmd.CommandText = "DELETE FROM Qualifications WHERE AdvisorId = @id";
         delCmd.Parameters.AddWithValue("@id", advisorId);
@@ -539,7 +539,7 @@ public class AdvisorRepository
             cmd.Parameters.AddWithValue("@aid", advisorId);
             cmd.Parameters.AddWithValue("@name", q.Name);
             cmd.Parameters.AddWithValue("@code", (object?)q.Code ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@date", q.Date.HasValue ? q.Date.Value.ToString("yyyy-MM-dd") : (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("@date", q.Date.HasValue ? q.Date.Value : (object)DBNull.Value);
             cmd.Parameters.AddWithValue("@status", (object?)q.Status ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
@@ -547,7 +547,7 @@ public class AdvisorRepository
 
     public List<string> GetCrdsNeedingEnrichment(int limit)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT a.CrdNumber FROM Advisors a
@@ -570,7 +570,7 @@ public class AdvisorRepository
     /// </summary>
     public List<string> GetCrdsNeedingIapdEnrichment(int limit = 200)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         // Prioritize advisors with no qualifications AND no employment history
         // (meaning FINRA detail fetch didn't work — IAPD enrichment is warranted).
@@ -579,7 +579,7 @@ public class AdvisorRepository
             SELECT a.CrdNumber
             FROM Advisors a
             WHERE a.CrdNumber IS NOT NULL
-              AND a.IsExcluded = 0
+              AND a.IsExcluded = FALSE
               AND NOT EXISTS (
                   SELECT 1 FROM Qualifications q WHERE q.AdvisorId = a.Id
               )
@@ -587,7 +587,7 @@ public class AdvisorRepository
                   SELECT 1 FROM EmploymentHistory e WHERE e.AdvisorId = a.Id
               )
             ORDER BY
-                CASE WHEN a.Source LIKE '%SEC%' THEN 0 ELSE 1 END,
+                CASE WHEN a.Source ILIKE '%SEC%' THEN 0 ELSE 1 END,
                 a.UpdatedAt ASC
             LIMIT @limit";
         cmd.Parameters.AddWithValue("@limit", limit);
@@ -605,7 +605,7 @@ public class AdvisorRepository
     {
         filter ??= new FirmSearchFilter();
 
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         var sb = new StringBuilder(@"
             SELECT Id, CrdNumber, Name, Address, City, State, ZipCode, Phone, Website,
                    BusinessType, IsRegisteredWithSec, IsRegisteredWithFinra, NumberOfAdvisors,
@@ -614,13 +614,13 @@ public class AdvisorRepository
                    AumDescription, StateOfOrganization, Country, NumberOfEmployees, LatestFilingDate,
                    RegulatoryAum, RegulatoryAumNonDiscretionary, NumClients,
                    BrokerProtocolMember, BrokerProtocolUpdatedAt
-            FROM Firms WHERE IsExcluded = 0");
+            FROM Firms WHERE IsExcluded = FALSE");
 
         var parameters = new List<(string name, object value)>();
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
         {
-            sb.Append(" AND Name LIKE @name");
+            sb.Append(" AND Name ILIKE @name");
             parameters.Add(("@name", $"%{filter.NameQuery}%"));
         }
         if (!string.IsNullOrWhiteSpace(filter.State))
@@ -635,7 +635,7 @@ public class AdvisorRepository
         }
         if (!string.IsNullOrWhiteSpace(filter.RegistrationStatus))
         {
-            sb.Append(" AND RegistrationStatus LIKE @status");
+            sb.Append(" AND RegistrationStatus ILIKE @status");
             parameters.Add(("@status", $"%{filter.RegistrationStatus}%"));
         }
         if (filter.MinAdvisors.HasValue && filter.MinAdvisors.Value > 0)
@@ -645,7 +645,7 @@ public class AdvisorRepository
         }
         if (filter.BrokerProtocolOnly)
         {
-            sb.Append(" AND BrokerProtocolMember = 1");
+            sb.Append(" AND BrokerProtocolMember = TRUE");
         }
         if (filter.MinRegulatoryAum.HasValue)
         {
@@ -677,7 +677,7 @@ public class AdvisorRepository
 
     public int UpsertFirm(Firm firm)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
 
         int existingId = 0;
         if (!string.IsNullOrEmpty(firm.CrdNumber))
@@ -705,7 +705,7 @@ public class AdvisorRepository
                     RegulatoryAum=@regAum, RegulatoryAumNonDiscretionary=@regAumNd,
                     NumClients=@numClients, BrokerProtocolMember=@bpMember,
                     BrokerProtocolUpdatedAt=@bpUpdated,
-                    UpdatedAt=datetime('now')
+                    UpdatedAt=NOW()
                 WHERE Id = @id";
             BindFirmParams(cmd, firm);
             cmd.Parameters.AddWithValue("@id", firm.Id);
@@ -726,8 +726,8 @@ public class AdvisorRepository
                     @btype, @sec, @finra, @numAdv, @regDate, @source, @recordType,
                     @secNum, @secRgn, @legalNm, @faxPhone, @mailAddr,
                     @regStatus, @aumDesc, @stateOrg,
-                    @regAum, @regAumNd, @numClients, @bpMember, @bpUpdated, datetime('now'));
-                SELECT last_insert_rowid();";
+                    @regAum, @regAumNd, @numClients, @bpMember, @bpUpdated, NOW())
+                RETURNING Id;";
             cmd.Parameters.AddWithValue("@crd", (object?)firm.CrdNumber ?? DBNull.Value);
             BindFirmParams(cmd, firm);
             firm.Id = Convert.ToInt32(cmd.ExecuteScalar());
@@ -736,7 +736,7 @@ public class AdvisorRepository
         return firm.Id;
     }
 
-    private static void BindFirmParams(SqliteCommand cmd, Firm f)
+    private static void BindFirmParams(NpgsqlCommand cmd, Firm f)
     {
         cmd.Parameters.AddWithValue("@name", f.Name);
         cmd.Parameters.AddWithValue("@addr", (object?)f.Address ?? DBNull.Value);
@@ -746,10 +746,10 @@ public class AdvisorRepository
         cmd.Parameters.AddWithValue("@phone", (object?)f.Phone ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@web", (object?)f.Website ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@btype", (object?)f.BusinessType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@sec", f.IsRegisteredWithSec ? 1 : 0);
-        cmd.Parameters.AddWithValue("@finra", f.IsRegisteredWithFinra ? 1 : 0);
+        cmd.Parameters.AddWithValue("@sec", f.IsRegisteredWithSec);
+        cmd.Parameters.AddWithValue("@finra", f.IsRegisteredWithFinra);
         cmd.Parameters.AddWithValue("@numAdv", (object?)f.NumberOfAdvisors ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@regDate", f.RegistrationDate.HasValue ? f.RegistrationDate.Value.ToString("yyyy-MM-dd") : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@regDate", f.RegistrationDate.HasValue ? f.RegistrationDate.Value : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("@source", (object?)f.Source ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@recordType", (object?)f.RecordType ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@secNum", (object?)f.SECNumber ?? DBNull.Value);
@@ -763,17 +763,17 @@ public class AdvisorRepository
         cmd.Parameters.AddWithValue("@regAum",     (object?)f.RegulatoryAum ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@regAumNd",   (object?)f.RegulatoryAumNonDiscretionary ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@numClients", (object?)f.NumClients ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@bpMember",   f.BrokerProtocolMember ? 1 : 0);
-        cmd.Parameters.AddWithValue("@bpUpdated",  f.BrokerProtocolUpdatedAt.HasValue ? f.BrokerProtocolUpdatedAt.Value.ToString("O") : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@bpMember",   f.BrokerProtocolMember);
+        cmd.Parameters.AddWithValue("@bpUpdated",  f.BrokerProtocolUpdatedAt.HasValue ? f.BrokerProtocolUpdatedAt.Value : (object)DBNull.Value);
     }
 
     /// <summary>
     /// Efficiently upserts a large batch of SEC firm records using a single transaction.
-    /// Uses SQLite ON CONFLICT to update existing rows without changing their Id.
+    /// Uses ON CONFLICT to update existing rows without changing their Id.
     /// </summary>
     public void UpsertFirmBatch(IEnumerable<Firm> firms, IProgress<string>? progress = null)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var txn = conn.BeginTransaction();
         using var cmd = conn.CreateCommand();
         cmd.Transaction = txn;
@@ -791,36 +791,36 @@ public class AdvisorRepository
                 @rectype, @regstatus, @regdate, @filingdate,
                 @numadv, @numemp, @aum,
                 @regaum, @regaumnd, @numclients,
-                1, 'SEC', datetime('now'), datetime('now'))
+                TRUE, 'SEC', NOW(), NOW())
             ON CONFLICT(CrdNumber) DO UPDATE SET
                 Name               = excluded.Name,
-                LegalName          = coalesce(excluded.LegalName, LegalName),
-                SECNumber          = coalesce(excluded.SECNumber, SECNumber),
-                SECRegion          = coalesce(excluded.SECRegion, SECRegion),
-                Address            = coalesce(excluded.Address, Address),
-                City               = coalesce(excluded.City, City),
-                State              = coalesce(excluded.State, State),
-                Country            = coalesce(excluded.Country, Country),
-                ZipCode            = coalesce(excluded.ZipCode, ZipCode),
-                Phone              = coalesce(excluded.Phone, Phone),
-                FaxPhone           = coalesce(excluded.FaxPhone, FaxPhone),
-                Website            = coalesce(excluded.Website, Website),
-                MailingAddress     = coalesce(excluded.MailingAddress, MailingAddress),
-                BusinessType       = coalesce(excluded.BusinessType, BusinessType),
-                StateOfOrganization = coalesce(excluded.StateOfOrganization, StateOfOrganization),
+                LegalName          = COALESCE(excluded.LegalName, LegalName),
+                SECNumber          = COALESCE(excluded.SECNumber, SECNumber),
+                SECRegion          = COALESCE(excluded.SECRegion, SECRegion),
+                Address            = COALESCE(excluded.Address, Address),
+                City               = COALESCE(excluded.City, City),
+                State              = COALESCE(excluded.State, State),
+                Country            = COALESCE(excluded.Country, Country),
+                ZipCode            = COALESCE(excluded.ZipCode, ZipCode),
+                Phone              = COALESCE(excluded.Phone, Phone),
+                FaxPhone           = COALESCE(excluded.FaxPhone, FaxPhone),
+                Website            = COALESCE(excluded.Website, Website),
+                MailingAddress     = COALESCE(excluded.MailingAddress, MailingAddress),
+                BusinessType       = COALESCE(excluded.BusinessType, BusinessType),
+                StateOfOrganization = COALESCE(excluded.StateOfOrganization, StateOfOrganization),
                 RecordType         = excluded.RecordType,
-                RegistrationStatus = coalesce(excluded.RegistrationStatus, RegistrationStatus),
-                RegistrationDate   = coalesce(excluded.RegistrationDate, RegistrationDate),
-                LatestFilingDate   = coalesce(excluded.LatestFilingDate, LatestFilingDate),
-                NumberOfAdvisors   = coalesce(excluded.NumberOfAdvisors, NumberOfAdvisors),
-                NumberOfEmployees  = coalesce(excluded.NumberOfEmployees, NumberOfEmployees),
-                AumDescription     = coalesce(excluded.AumDescription, AumDescription),
-                RegulatoryAum      = coalesce(excluded.RegulatoryAum, RegulatoryAum),
-                RegulatoryAumNonDiscretionary = coalesce(excluded.RegulatoryAumNonDiscretionary, RegulatoryAumNonDiscretionary),
-                NumClients         = coalesce(excluded.NumClients, NumClients),
-                IsRegisteredWithSec = 1,
+                RegistrationStatus = COALESCE(excluded.RegistrationStatus, RegistrationStatus),
+                RegistrationDate   = COALESCE(excluded.RegistrationDate, RegistrationDate),
+                LatestFilingDate   = COALESCE(excluded.LatestFilingDate, LatestFilingDate),
+                NumberOfAdvisors   = COALESCE(excluded.NumberOfAdvisors, NumberOfAdvisors),
+                NumberOfEmployees  = COALESCE(excluded.NumberOfEmployees, NumberOfEmployees),
+                AumDescription     = COALESCE(excluded.AumDescription, AumDescription),
+                RegulatoryAum      = COALESCE(excluded.RegulatoryAum, RegulatoryAum),
+                RegulatoryAumNonDiscretionary = COALESCE(excluded.RegulatoryAumNonDiscretionary, RegulatoryAumNonDiscretionary),
+                NumClients         = COALESCE(excluded.NumClients, NumClients),
+                IsRegisteredWithSec = TRUE,
                 Source             = 'SEC',
-                UpdatedAt          = datetime('now')
+                UpdatedAt          = NOW()
         ";
 
         int count = 0;
@@ -846,7 +846,7 @@ public class AdvisorRepository
             cmd.Parameters.AddWithValue("@rectype", (object?)f.RecordType ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@regstatus", (object?)f.RegistrationStatus ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@regdate", f.RegistrationDate.HasValue
-                ? (object)f.RegistrationDate.Value.ToString("yyyy-MM-dd") : DBNull.Value);
+                ? (object)f.RegistrationDate.Value : DBNull.Value);
             cmd.Parameters.AddWithValue("@filingdate", (object?)f.LatestFilingDate ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@numadv", (object?)f.NumberOfAdvisors ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@numemp", (object?)f.NumberOfEmployees ?? DBNull.Value);
@@ -866,9 +866,9 @@ public class AdvisorRepository
 
     public List<string> GetDistinctStates()
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DISTINCT State FROM Advisors WHERE State IS NOT NULL AND IsExcluded=0 ORDER BY State";
+        cmd.CommandText = "SELECT DISTINCT State FROM Advisors WHERE State IS NOT NULL AND IsExcluded = FALSE ORDER BY State";
         var states = new List<string>();
         using var r = cmd.ExecuteReader();
         while (r.Read())
@@ -878,9 +878,9 @@ public class AdvisorRepository
 
     public List<string> GetDistinctFirmStates()
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DISTINCT State FROM Firms WHERE State IS NOT NULL AND IsExcluded=0 ORDER BY State";
+        cmd.CommandText = "SELECT DISTINCT State FROM Firms WHERE State IS NOT NULL AND IsExcluded = FALSE ORDER BY State";
         var states = new List<string>();
         using var r = cmd.ExecuteReader();
         while (r.Read())
@@ -890,9 +890,9 @@ public class AdvisorRepository
 
     public List<string> GetDistinctFirmNames()
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DISTINCT CurrentFirmName FROM Advisors WHERE CurrentFirmName IS NOT NULL AND IsExcluded=0 ORDER BY CurrentFirmName LIMIT 200";
+        cmd.CommandText = "SELECT DISTINCT CurrentFirmName FROM Advisors WHERE CurrentFirmName IS NOT NULL AND IsExcluded = FALSE ORDER BY CurrentFirmName LIMIT 200";
         var firms = new List<string>();
         using var r = cmd.ExecuteReader();
         while (r.Read())
@@ -902,16 +902,16 @@ public class AdvisorRepository
 
     public int GetAdvisorCount(SearchFilter filter)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         var sb = new StringBuilder("SELECT COUNT(*) FROM Advisors WHERE 1=1");
         var parameters = new List<(string name, object value)>();
 
         if (!filter.IncludeExcluded)
-            sb.Append(" AND IsExcluded = 0");
+            sb.Append(" AND IsExcluded = FALSE");
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
         {
-            sb.Append(" AND (FirstName LIKE @name OR LastName LIKE @name OR (FirstName || ' ' || LastName) LIKE @name)");
+            sb.Append(" AND (FirstName ILIKE @name OR LastName ILIKE @name OR (FirstName || ' ' || LastName) ILIKE @name)");
             parameters.Add(("@name", $"%{filter.NameQuery}%"));
         }
 
@@ -923,7 +923,7 @@ public class AdvisorRepository
 
         if (!string.IsNullOrWhiteSpace(filter.FirmName))
         {
-            sb.Append(" AND CurrentFirmName LIKE @firmName");
+            sb.Append(" AND CurrentFirmName ILIKE @firmName");
             parameters.Add(("@firmName", $"%{filter.FirmName}%"));
         }
 
@@ -941,26 +941,26 @@ public class AdvisorRepository
 
         if (!string.IsNullOrWhiteSpace(filter.RegistrationStatus))
         {
-            sb.Append(" AND RegistrationStatus LIKE @status");
+            sb.Append(" AND RegistrationStatus ILIKE @status");
             parameters.Add(("@status", filter.RegistrationStatus));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.LicenseType))
         {
-            sb.Append(" AND Licenses LIKE @license");
+            sb.Append(" AND Licenses ILIKE @license");
             parameters.Add(("@license", $"%{filter.LicenseType}%"));
         }
 
         if (filter.HasDisclosures.HasValue)
         {
             sb.Append(" AND HasDisclosures = @hasDisc");
-            parameters.Add(("@hasDisc", filter.HasDisclosures.Value ? 1 : 0));
+            parameters.Add(("@hasDisc", filter.HasDisclosures.Value));
         }
 
         if (filter.IsImportedToCrm.HasValue)
         {
             sb.Append(" AND IsImportedToCrm = @imported");
-            parameters.Add(("@imported", filter.IsImportedToCrm.Value ? 1 : 0));
+            parameters.Add(("@imported", filter.IsImportedToCrm.Value));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.Source))
@@ -968,11 +968,11 @@ public class AdvisorRepository
             if (filter.Source.Equals("Both", StringComparison.OrdinalIgnoreCase)
                 || filter.Source.Contains(','))
             {
-                sb.Append(" AND Source LIKE '%FINRA%' AND Source LIKE '%SEC%'");
+                sb.Append(" AND Source ILIKE '%FINRA%' AND Source ILIKE '%SEC%'");
             }
             else
             {
-                sb.Append(" AND Source LIKE @source");
+                sb.Append(" AND Source ILIKE @source");
                 parameters.Add(("@source", $"%{filter.Source}%"));
             }
         }
@@ -997,7 +997,7 @@ public class AdvisorRepository
 
         if (!string.IsNullOrWhiteSpace(filter.City))
         {
-            sb.Append(" AND City LIKE @city");
+            sb.Append(" AND City ILIKE @city");
             parameters.Add(("@city", $"%{filter.City}%"));
         }
 
@@ -1015,7 +1015,7 @@ public class AdvisorRepository
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
-    private static Advisor MapAdvisor(SqliteDataReader r)
+    private static Advisor MapAdvisor(NpgsqlDataReader r)
     {
         return new Advisor
         {
@@ -1037,27 +1037,27 @@ public class AdvisorRepository
             CurrentFirmCrd = r.IsDBNull(15) ? null : r.GetString(15),
             CurrentFirmId = r.IsDBNull(16) ? null : r.GetInt32(16),
             RegistrationStatus = r.IsDBNull(17) ? null : r.GetString(17),
-            RegistrationDate = r.IsDBNull(18) ? null : DateTime.Parse(r.GetString(18)),
+            RegistrationDate = r.IsDBNull(18) ? null : r.GetDateTime(18),
             YearsOfExperience = r.IsDBNull(19) ? null : r.GetInt32(19),
-            HasDisclosures = r.GetInt32(20) == 1,
+            HasDisclosures = r.GetBoolean(20),
             DisclosureCount = r.GetInt32(21),
             Source = r.IsDBNull(22) ? null : r.GetString(22),
-            IsExcluded = r.GetInt32(23) == 1,
+            IsExcluded = r.GetBoolean(23),
             ExclusionReason = r.IsDBNull(24) ? null : r.GetString(24),
-            IsImportedToCrm = r.GetInt32(25) == 1,
+            IsImportedToCrm = r.GetBoolean(25),
             CrmId = r.IsDBNull(26) ? null : r.GetString(26),
-            CreatedAt = DateTime.Parse(r.GetString(27)),
-            UpdatedAt = DateTime.Parse(r.GetString(28)),
+            CreatedAt = r.GetDateTime(27),
+            UpdatedAt = r.GetDateTime(28),
             RecordType = r.IsDBNull(29) ? null : r.GetString(29),
-            Suffix = r.FieldCount > 30 && !r.IsDBNull(30) ? r.GetString(30) : null,
-            IapdLink = r.FieldCount > 31 && !r.IsDBNull(31) ? r.GetString(31) : null,
-            RegAuthorities = r.FieldCount > 32 && !r.IsDBNull(32) ? r.GetString(32) : null,
-            DisclosureFlags = r.FieldCount > 33 && !r.IsDBNull(33) ? r.GetString(33) : null,
-            OtherNames = r.FieldCount > 34 && !r.IsDBNull(34) ? r.GetString(34) : null
+            Suffix = !r.IsDBNull(30) ? r.GetString(30) : null,
+            IapdLink = !r.IsDBNull(31) ? r.GetString(31) : null,
+            RegAuthorities = !r.IsDBNull(32) ? r.GetString(32) : null,
+            DisclosureFlags = !r.IsDBNull(33) ? r.GetString(33) : null,
+            OtherNames = !r.IsDBNull(34) ? r.GetString(34) : null
         };
     }
 
-    private static Firm MapFirm(SqliteDataReader r)
+    private static Firm MapFirm(NpgsqlDataReader r)
     {
         return new Firm
         {
@@ -1071,31 +1071,31 @@ public class AdvisorRepository
             Phone = r.IsDBNull(7) ? null : r.GetString(7),
             Website = r.IsDBNull(8) ? null : r.GetString(8),
             BusinessType = r.IsDBNull(9) ? null : r.GetString(9),
-            IsRegisteredWithSec = r.GetInt32(10) == 1,
-            IsRegisteredWithFinra = r.GetInt32(11) == 1,
+            IsRegisteredWithSec = r.GetBoolean(10),
+            IsRegisteredWithFinra = r.GetBoolean(11),
             NumberOfAdvisors = r.IsDBNull(12) ? null : r.GetInt32(12),
-            RegistrationDate = r.IsDBNull(13) ? null : DateTime.Parse(r.GetString(13)),
+            RegistrationDate = r.IsDBNull(13) ? null : r.GetDateTime(13),
             Source = r.IsDBNull(14) ? null : r.GetString(14),
-            IsExcluded = r.GetInt32(15) == 1,
-            CreatedAt = DateTime.Parse(r.GetString(16)),
-            UpdatedAt = DateTime.Parse(r.GetString(17)),
+            IsExcluded = r.GetBoolean(15),
+            CreatedAt = r.GetDateTime(16),
+            UpdatedAt = r.GetDateTime(17),
             RecordType = r.IsDBNull(18) ? null : r.GetString(18),
-            SECNumber = r.FieldCount > 19 && !r.IsDBNull(19) ? r.GetString(19) : null,
-            SECRegion = r.FieldCount > 20 && !r.IsDBNull(20) ? r.GetString(20) : null,
-            LegalName = r.FieldCount > 21 && !r.IsDBNull(21) ? r.GetString(21) : null,
-            FaxPhone = r.FieldCount > 22 && !r.IsDBNull(22) ? r.GetString(22) : null,
-            MailingAddress = r.FieldCount > 23 && !r.IsDBNull(23) ? r.GetString(23) : null,
-            RegistrationStatus = r.FieldCount > 24 && !r.IsDBNull(24) ? r.GetString(24) : null,
-            AumDescription = r.FieldCount > 25 && !r.IsDBNull(25) ? r.GetString(25) : null,
-            StateOfOrganization = r.FieldCount > 26 && !r.IsDBNull(26) ? r.GetString(26) : null,
-            Country = r.FieldCount > 27 && !r.IsDBNull(27) ? r.GetString(27) : null,
-            NumberOfEmployees = r.FieldCount > 28 && !r.IsDBNull(28) ? r.GetInt32(28) : null,
-            LatestFilingDate = r.FieldCount > 29 && !r.IsDBNull(29) ? r.GetString(29) : null,
-            RegulatoryAum = r.FieldCount > 30 && !r.IsDBNull(30) ? (decimal?)r.GetDouble(30) : null,
-            RegulatoryAumNonDiscretionary = r.FieldCount > 31 && !r.IsDBNull(31) ? (decimal?)r.GetDouble(31) : null,
-            NumClients = r.FieldCount > 32 && !r.IsDBNull(32) ? r.GetInt32(32) : null,
-            BrokerProtocolMember = r.FieldCount > 33 && !r.IsDBNull(33) && r.GetInt32(33) == 1,
-            BrokerProtocolUpdatedAt = r.FieldCount > 34 && !r.IsDBNull(34) ? DateTime.Parse(r.GetString(34)) : null
+            SECNumber = !r.IsDBNull(19) ? r.GetString(19) : null,
+            SECRegion = !r.IsDBNull(20) ? r.GetString(20) : null,
+            LegalName = !r.IsDBNull(21) ? r.GetString(21) : null,
+            FaxPhone = !r.IsDBNull(22) ? r.GetString(22) : null,
+            MailingAddress = !r.IsDBNull(23) ? r.GetString(23) : null,
+            RegistrationStatus = !r.IsDBNull(24) ? r.GetString(24) : null,
+            AumDescription = !r.IsDBNull(25) ? r.GetString(25) : null,
+            StateOfOrganization = !r.IsDBNull(26) ? r.GetString(26) : null,
+            Country = !r.IsDBNull(27) ? r.GetString(27) : null,
+            NumberOfEmployees = !r.IsDBNull(28) ? r.GetInt32(28) : null,
+            LatestFilingDate = !r.IsDBNull(29) ? r.GetString(29) : null,
+            RegulatoryAum = !r.IsDBNull(30) ? (decimal?)r.GetDouble(30) : null,
+            RegulatoryAumNonDiscretionary = !r.IsDBNull(31) ? (decimal?)r.GetDouble(31) : null,
+            NumClients = !r.IsDBNull(32) ? r.GetInt32(32) : null,
+            BrokerProtocolMember = !r.IsDBNull(33) && r.GetBoolean(33),
+            BrokerProtocolUpdatedAt = !r.IsDBNull(34) ? r.GetDateTime(34) : null
         };
     }
 
@@ -1105,13 +1105,13 @@ public class AdvisorRepository
     /// </summary>
     public int UpdateBrokerProtocolStatus(List<string> memberNames, DateTime fetchedAt)
     {
-        var conn = _context.GetConnection();
+        using var conn = _context.GetConnection();
         int updated = 0;
 
         // Clear all existing memberships
         using (var clearCmd = conn.CreateCommand())
         {
-            clearCmd.CommandText = "UPDATE Firms SET BrokerProtocolMember = 0";
+            clearCmd.CommandText = "UPDATE Firms SET BrokerProtocolMember = FALSE";
             clearCmd.ExecuteNonQuery();
         }
 
@@ -1152,8 +1152,8 @@ public class AdvisorRepository
         {
             using var updateCmd = conn.CreateCommand();
             var idList = string.Join(",", toUpdate);
-            updateCmd.CommandText = $"UPDATE Firms SET BrokerProtocolMember = 1, BrokerProtocolUpdatedAt = @ts WHERE Id IN ({idList})";
-            updateCmd.Parameters.AddWithValue("@ts", fetchedAt.ToString("O"));
+            updateCmd.CommandText = $"UPDATE Firms SET BrokerProtocolMember = TRUE, BrokerProtocolUpdatedAt = @ts WHERE Id IN ({idList})";
+            updateCmd.Parameters.AddWithValue("@ts", fetchedAt);
             updated = updateCmd.ExecuteNonQuery();
         }
 

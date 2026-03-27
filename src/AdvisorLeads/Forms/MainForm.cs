@@ -68,9 +68,11 @@ public class MainForm : Form
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "AdvisorLeads");
         Directory.CreateDirectory(appData);
-        var dbPath = Path.Combine(appData, "advisorleads.db");
 
-        _db = new DatabaseContext(dbPath);
+        var connectionString = LoadSetting("PostgresConnectionString")
+            ?? "Host=localhost;Port=5432;Database=advisorleads;Username=advisorleads;Password=advisorleads";
+
+        _db = new DatabaseContext(connectionString);
         _db.InitializeDatabase();
         _repo = new AdvisorRepository(_db);
         _finra = new FinraService();
