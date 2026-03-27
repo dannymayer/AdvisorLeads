@@ -30,9 +30,8 @@ public class InitialSetupDialog : Form
     public InitialSetupDialog()
     {
         Text = "AdvisorLeads – Initial Setup";
-        Width = 560;
-        Height = 420;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        Size = new Size(560, 420);
+        MinimumSize = new Size(460, 340);
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;

@@ -53,8 +53,9 @@ public class FirmDetailPanel : UserControl
             Text = "Select a firm",
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
             AutoSize = true,
-            Location = new Point(0, 0),
-            ForeColor = Color.FromArgb(30, 30, 80)
+            Dock = DockStyle.Top,
+            ForeColor = Color.FromArgb(30, 30, 80),
+            Padding = new Padding(0, 0, 0, 4)
         };
         header.Controls.Add(_lblName);
 
@@ -63,28 +64,31 @@ public class FirmDetailPanel : UserControl
             Text = "",
             Font = new Font("Segoe UI", 9),
             AutoSize = true,
-            Location = new Point(2, 34),
-            ForeColor = Color.Gray
+            Dock = DockStyle.Top,
+            ForeColor = Color.Gray,
+            Padding = new Padding(2, 0, 0, 4)
         };
         header.Controls.Add(_lblCrd);
 
+        var badgeFlow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Padding = new Padding(0)
+        };
+
         _lblSourceBadge = MakeBadge("SEC", Color.FromArgb(0, 120, 215));
-        _lblSourceBadge.Location = new Point(2, 56);
-        header.Controls.Add(_lblSourceBadge);
-
         _lblTypeBadge = MakeBadge("Investment Advisor", Color.FromArgb(0, 150, 100));
-        _lblTypeBadge.Location = new Point(50, 56);
-        header.Controls.Add(_lblTypeBadge);
-
         _lblStatusBadge = MakeBadge("", Color.Gray);
-        _lblStatusBadge.Location = new Point(200, 56);
         _lblStatusBadge.Visible = false;
-        header.Controls.Add(_lblStatusBadge);
-
         _lblBpBadge = MakeBadge("Broker Protocol ✓", Color.FromArgb(0, 100, 170));
-        _lblBpBadge.Location = new Point(350, 56);
         _lblBpBadge.Visible = false;
-        header.Controls.Add(_lblBpBadge);
+
+        badgeFlow.Controls.AddRange(new Control[] { _lblSourceBadge, _lblTypeBadge, _lblStatusBadge, _lblBpBadge });
+        header.Controls.Add(badgeFlow);
 
         mainLayout.Controls.Add(header, 0, 0);
 
@@ -96,10 +100,10 @@ public class FirmDetailPanel : UserControl
             AutoScroll = true,
             Padding = new Padding(0, 8, 0, 0)
         };
-        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
 
         mainLayout.Controls.Add(_infoGrid, 0, 1);
 
@@ -133,22 +137,13 @@ public class FirmDetailPanel : UserControl
                 ? Color.FromArgb(0, 128, 0)
                 : Color.Gray;
             _lblStatusBadge.Visible = true;
-            _lblStatusBadge.Location = new Point(4 + _lblTypeBadge.Right, 56);
         }
         else
         {
             _lblStatusBadge.Visible = false;
         }
 
-        if (firm.BrokerProtocolMember)
-        {
-            _lblBpBadge.Location = new Point((_lblStatusBadge.Visible ? _lblStatusBadge.Right : _lblTypeBadge.Right) + 4, 56);
-            _lblBpBadge.Visible = true;
-        }
-        else
-        {
-            _lblBpBadge.Visible = false;
-        }
+        _lblBpBadge.Visible = firm.BrokerProtocolMember;
 
         _infoGrid.Controls.Clear();
         _infoGrid.RowStyles.Clear();

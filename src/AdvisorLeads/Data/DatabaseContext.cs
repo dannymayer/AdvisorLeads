@@ -224,12 +224,14 @@ public class DatabaseContext : DbContext
     }
 
     /// <summary>
-    /// Creates the database and all tables/indexes if they don't exist.
+    /// Creates the database and all tables/indexes if they don't exist,
+    /// then applies any schema upgrades for columns/tables added after initial creation.
     /// Call once at startup.
     /// </summary>
     public void InitializeDatabase()
     {
         Database.EnsureCreated();
+        ApplySchemaUpgrades();
 
         // Apply SQLite performance pragmas
         Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
@@ -238,6 +240,128 @@ public class DatabaseContext : DbContext
         Database.ExecuteSqlRaw("PRAGMA cache_size=-8000");
         Database.ExecuteSqlRaw("PRAGMA temp_store=MEMORY");
         Database.ExecuteSqlRaw("PRAGMA mmap_size=268435456");
+    }
+
+    /// <summary>
+    /// Ensures that columns/tables added after initial database creation are present.
+    /// EnsureCreated() only creates the schema when the DB file is brand-new; this
+    /// method handles incremental upgrades for existing databases.
+    /// </summary>
+    private void ApplySchemaUpgrades()
+    {
+        // Create any new tables that don't exist yet
+        var createScript = Database.GenerateCreateScript();
+        foreach (var rawStmt in createScript.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var stmt = rawStmt.Trim();
+            if (string.IsNullOrEmpty(stmt)) continue;
+
+            if (stmt.StartsWith("CREATE TABLE", StringComparison.OrdinalIgnoreCase))
+            {
+                var safe = stmt.Replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS");
+                try { Database.ExecuteSqlRaw(safe); } catch { /* table already exists */ }
+            }
+            else if (stmt.StartsWith("CREATE UNIQUE INDEX", StringComparison.OrdinalIgnoreCase))
+            {
+                var safe = stmt.Replace("CREATE UNIQUE INDEX", "CREATE UNIQUE INDEX IF NOT EXISTS");
+                try { Database.ExecuteSqlRaw(safe); } catch { /* index already exists */ }
+            }
+            else if (stmt.StartsWith("CREATE INDEX", StringComparison.OrdinalIgnoreCase))
+            {
+                var safe = stmt.Replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS");
+                try { Database.ExecuteSqlRaw(safe); } catch { /* index already exists */ }
+            }
+        }
+
+        // Add any missing columns to existing tables
+        AddMissingColumns("Advisors", new Dictionary<string, string>
+        {
+            ["IapdNumber"] = "TEXT",
+            ["MiddleName"] = "TEXT",
+            ["OtherNames"] = "TEXT",
+            ["Suffix"] = "TEXT",
+            ["IapdLink"] = "TEXT",
+            ["RegAuthorities"] = "TEXT",
+            ["DisclosureFlags"] = "TEXT",
+            ["ExclusionReason"] = "TEXT",
+            ["CrmId"] = "TEXT",
+            ["Qualifications"] = "TEXT",
+            ["IsFavorited"] = "INTEGER NOT NULL DEFAULT 0",
+            ["IsExcluded"] = "INTEGER NOT NULL DEFAULT 0",
+            ["IsImportedToCrm"] = "INTEGER NOT NULL DEFAULT 0",
+        });
+
+        AddMissingColumns("Firms", new Dictionary<string, string>
+        {
+            ["SECNumber"] = "TEXT",
+            ["SECRegion"] = "TEXT",
+            ["LegalName"] = "TEXT",
+            ["FaxPhone"] = "TEXT",
+            ["MailingAddress"] = "TEXT",
+            ["RegistrationStatus"] = "TEXT",
+            ["AumDescription"] = "TEXT",
+            ["StateOfOrganization"] = "TEXT",
+            ["Country"] = "TEXT",
+            ["LatestFilingDate"] = "TEXT",
+            ["AdvisoryActivities"] = "TEXT",
+            ["NumberOfEmployees"] = "INTEGER",
+            ["NumClients"] = "INTEGER",
+            ["ClientsIndividuals"] = "INTEGER",
+            ["ClientsHighNetWorth"] = "INTEGER",
+            ["ClientsBankingInstitutions"] = "INTEGER",
+            ["ClientsInvestmentCompanies"] = "INTEGER",
+            ["ClientsPensionPlans"] = "INTEGER",
+            ["ClientsCharitable"] = "INTEGER",
+            ["ClientsGovernment"] = "INTEGER",
+            ["ClientsOther"] = "INTEGER",
+            ["PrivateFundCount"] = "INTEGER",
+            ["NumberOfOffices"] = "INTEGER",
+            ["RegulatoryAum"] = "TEXT",
+            ["RegulatoryAumNonDiscretionary"] = "TEXT",
+            ["PrivateFundGrossAssets"] = "TEXT",
+            ["TotalAumRelatedPersons"] = "TEXT",
+            ["BrokerProtocolMember"] = "INTEGER NOT NULL DEFAULT 0",
+            ["BrokerProtocolUpdatedAt"] = "TEXT",
+            ["CompensationFeeOnly"] = "INTEGER",
+            ["CompensationCommission"] = "INTEGER",
+            ["CompensationHourly"] = "INTEGER",
+            ["CompensationPerformanceBased"] = "INTEGER",
+            ["HasCustody"] = "INTEGER",
+            ["HasDiscretionaryAuthority"] = "INTEGER",
+            ["IsBrokerDealer"] = "INTEGER",
+            ["IsInsuranceCompany"] = "INTEGER",
+            ["IsExcluded"] = "INTEGER NOT NULL DEFAULT 0",
+        });
+    }
+
+    private void AddMissingColumns(string tableName, Dictionary<string, string> expectedColumns)
+    {
+        var existing = GetExistingColumns(tableName);
+        foreach (var (column, definition) in expectedColumns)
+        {
+            if (!existing.Contains(column))
+            {
+                // Table/column names are from hardcoded dictionaries, not user input
+                var sql = string.Concat("ALTER TABLE \"", tableName, "\" ADD COLUMN \"", column, "\" ", definition);
+                try { Database.ExecuteSqlRaw(sql); }
+                catch { /* column may already exist */ }
+            }
+        }
+    }
+
+    private HashSet<string> GetExistingColumns(string tableName)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var conn = Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            conn.Open();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info(\"{tableName}\")";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            columns.Add(reader.GetString(1)); // index 1 = column name
+        return columns;
     }
 
     /// <summary>

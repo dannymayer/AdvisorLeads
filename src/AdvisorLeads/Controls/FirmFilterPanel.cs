@@ -23,11 +23,12 @@ public class FirmFilterPanel : UserControl
 
     private void BuildUI()
     {
-        this.Height = 44;
         this.MinimumSize = new Size(0, 44);
         this.BackColor = Color.FromArgb(240, 242, 250);
         this.Padding = new Padding(4, 6, 4, 4);
         this.Dock = DockStyle.Top;
+        this.AutoSize = true;
+        this.AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
         var flow = new FlowLayoutPanel
         {

@@ -20,7 +20,7 @@ public class AddToListDialog : Form
         _lists = existingLists;
         Text = "Add to List";
         Size = new Size(360, 340);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimumSize = new Size(300, 280);
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false;
         MinimizeBox = false;

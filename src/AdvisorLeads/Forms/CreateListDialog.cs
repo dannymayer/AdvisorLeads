@@ -14,7 +14,7 @@ public class CreateListDialog : Form
     {
         Text = existingName == null ? "Create New List" : "Edit List";
         Size = new Size(380, 200);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimumSize = new Size(320, 180);
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false;
         MinimizeBox = false;

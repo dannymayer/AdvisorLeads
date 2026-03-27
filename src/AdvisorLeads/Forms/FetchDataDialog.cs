@@ -25,9 +25,8 @@ public class FetchDataDialog : Form
     private void BuildUI()
     {
         this.Text = "Fetch New Data";
-        this.Width = 480;
-        this.Height = 440;
-        this.FormBorderStyle = FormBorderStyle.FixedDialog;
+        this.Size = new Size(480, 440);
+        this.MinimumSize = new Size(400, 360);
         this.MaximizeBox = false;
         this.MinimizeBox = false;
         this.StartPosition = FormStartPosition.CenterParent;

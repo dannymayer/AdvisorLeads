@@ -49,8 +49,8 @@ public partial class FilterPanel : UserControl
             Padding = new Padding(6, 4, 6, 8),
             BackColor = Color.FromArgb(245, 246, 250)
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65));
 
         int row = 0;
 

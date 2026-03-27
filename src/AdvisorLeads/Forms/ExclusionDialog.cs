@@ -16,9 +16,8 @@ public class ExclusionDialog : Form
     private void BuildUI(string advisorName)
     {
         this.Text = "Exclude Advisor";
-        this.Width = 400;
-        this.Height = 200;
-        this.FormBorderStyle = FormBorderStyle.FixedDialog;
+        this.Size = new Size(400, 200);
+        this.MinimumSize = new Size(340, 180);
         this.MaximizeBox = false;
         this.MinimizeBox = false;
         this.StartPosition = FormStartPosition.CenterParent;

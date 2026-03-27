@@ -273,10 +273,10 @@ public class AdvisorCard : Panel
     private void OnMouseHover(bool hovering)
     {
         if (_isSelected) return;
-        if (hovering)
-            BackColor = HoverBg;
-        else
-            BackColor = _advisor?.IsFavorited == true ? FavoriteBg : DefaultBg;
-        BackColor = hovering ? HoverBg : DefaultBg;
+        BackColor = hovering
+            ? HoverBg
+            : (_advisor?.IsFavorited == true ? FavoriteBg
+               : _advisor?.IsExcluded == true ? ExcludedBg
+               : DefaultBg);
     }
 }

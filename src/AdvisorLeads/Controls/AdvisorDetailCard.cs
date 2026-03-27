@@ -119,10 +119,10 @@ public class AdvisorDetailCard : UserControl
             Dock = DockStyle.Fill,
             Padding = new Padding(0, 0, 0, 12)
         };
-        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
-        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
-        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+        _infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
         mainLayout.Controls.Add(_infoGrid, 0, 1);
 
         // ── Tabs ──────────────────────────────────────────────────────
@@ -142,12 +142,12 @@ public class AdvisorDetailCard : UserControl
             GridLines = true,
             Font = new Font("Segoe UI", 9)
         };
-        _lstEmployment.Columns.Add("Firm", 220);
+        _lstEmployment.Columns.Add("Firm", -2);
         _lstEmployment.Columns.Add("CRD", 80);
         _lstEmployment.Columns.Add("Start", 90);
         _lstEmployment.Columns.Add("End", 90);
         _lstEmployment.Columns.Add("Position", 140);
-        _lstEmployment.Columns.Add("Location", 180);
+        _lstEmployment.Columns.Add("Location", -2);
         empPage.Controls.Add(_lstEmployment);
 
         // Disclosures tab
@@ -162,7 +162,7 @@ public class AdvisorDetailCard : UserControl
         };
         _lstDisclosures.Columns.Add("Type", 130);
         _lstDisclosures.Columns.Add("Date", 90);
-        _lstDisclosures.Columns.Add("Description", 260);
+        _lstDisclosures.Columns.Add("Description", -2);
         _lstDisclosures.Columns.Add("Resolution", 120);
         discPage.Controls.Add(_lstDisclosures);
 
@@ -176,7 +176,7 @@ public class AdvisorDetailCard : UserControl
             GridLines = true,
             Font = new Font("Segoe UI", 9)
         };
-        _lstQualifications.Columns.Add("Exam / Qualification", 260);
+        _lstQualifications.Columns.Add("Exam / Qualification", -2);
         _lstQualifications.Columns.Add("Code", 80);
         _lstQualifications.Columns.Add("Date", 100);
         _lstQualifications.Columns.Add("Status", 100);
@@ -192,7 +192,7 @@ public class AdvisorDetailCard : UserControl
             GridLines = true,
             Font = new Font("Segoe UI", 9)
         };
-        _lstRegistrations.Columns.Add("State / Authority", 200);
+        _lstRegistrations.Columns.Add("State / Authority", -2);
         regPage.Controls.Add(_lstRegistrations);
 
         _tabs.TabPages.AddRange(new[] { empPage, discPage, qualPage, regPage });

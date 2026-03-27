@@ -84,6 +84,9 @@ public class ListManagerForm : Form
             Dock = DockStyle.Bottom,
             FlowDirection = FlowDirection.LeftToRight,
             AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            MinimumSize = new Size(0, 36),
             Padding = new Padding(0, 4, 0, 0)
         };
 
@@ -121,10 +124,10 @@ public class ListManagerForm : Form
             MultiSelect = true,
             Font = new Font("Segoe UI", 9)
         };
-        _lvMembers.Columns.Add("Name", 180);
+        _lvMembers.Columns.Add("Name", -2);
         _lvMembers.Columns.Add("Type", 100);
         _lvMembers.Columns.Add("CRD", 75);
-        _lvMembers.Columns.Add("Firm", 170);
+        _lvMembers.Columns.Add("Firm", -2);
         _lvMembers.Columns.Add("City", 100);
         _lvMembers.Columns.Add("State", 50);
         _lvMembers.Columns.Add("Status", 90);
@@ -146,6 +149,9 @@ public class ListManagerForm : Form
             Dock = DockStyle.Bottom,
             FlowDirection = FlowDirection.LeftToRight,
             AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            MinimumSize = new Size(0, 36),
             Padding = new Padding(0, 4, 0, 4)
         };
         _btnRemoveMember = MakeButton("Remove Selected", Color.FromArgb(200, 80, 60), 120);

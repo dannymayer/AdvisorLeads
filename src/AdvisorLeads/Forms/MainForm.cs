@@ -202,9 +202,13 @@ public class MainForm : Form
         _contentSplit.Panel1MinSize = 280;
         _firmContentSplit.Panel1MinSize = 280;
 
-        SetSafeSplitterDistance(_mainSplit, MainSplitDefaultDistance);
-        SetSafeSplitterDistance(_contentSplit, ContentSplitDefaultDistance);
-        SetSafeSplitterDistance(_firmContentSplit, ContentSplitDefaultDistance);
+        // Use proportional distances based on actual form width
+        int mainDist = Math.Max(180, (int)(this.ClientSize.Width * 0.18));
+        int contentDist = Math.Max(280, (int)(_mainSplit.Panel2.Width * 0.45));
+
+        SetSafeSplitterDistance(_mainSplit, mainDist);
+        SetSafeSplitterDistance(_contentSplit, contentDist);
+        SetSafeSplitterDistance(_firmContentSplit, contentDist);
     }
 
     private static void SetSafeSplitterDistance(SplitContainer splitContainer, int preferredDistance)
@@ -280,8 +284,6 @@ public class MainForm : Form
         listsMenu.DropDownItems.AddRange(new ToolStripItem[] { manageLists, new ToolStripSeparator(), addToListItem });
 
         _menuStrip.Items.AddRange(new ToolStripItem[] { dataMenu, crmMenu, listsMenu, viewMenu, helpMenu, debugMenu });
-        this.Controls.Add(_menuStrip);
-        this.MainMenuStrip = _menuStrip;
         this.Controls.Add(_menuStrip);
         this.MainMenuStrip = _menuStrip;
     }
@@ -404,7 +406,7 @@ public class MainForm : Form
             BorderStyle = BorderStyle.None
         };
 
-        _firmListView.Columns.Add("Name", 200);
+        _firmListView.Columns.Add("Name", -2);
         _firmListView.Columns.Add("CRD", 70);
         _firmListView.Columns.Add("SEC #", 90);
         _firmListView.Columns.Add("State", 50);

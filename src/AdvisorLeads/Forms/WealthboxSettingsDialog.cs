@@ -18,9 +18,8 @@ public class WealthboxSettingsDialog : Form
     private void BuildUI(string currentToken)
     {
         this.Text = "Wealthbox CRM Settings";
-        this.Width = 440;
-        this.Height = 220;
-        this.FormBorderStyle = FormBorderStyle.FixedDialog;
+        this.Size = new Size(440, 220);
+        this.MinimumSize = new Size(380, 200);
         this.MaximizeBox = false;
         this.MinimizeBox = false;
         this.StartPosition = FormStartPosition.CenterParent;
