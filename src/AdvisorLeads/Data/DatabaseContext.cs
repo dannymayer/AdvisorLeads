@@ -183,6 +183,7 @@ public class DatabaseContext : IDisposable
         TryAddColumn(conn, "Advisors", "RegAuthorities", "TEXT");
         TryAddColumn(conn, "Advisors", "DisclosureFlags", "TEXT");
         TryAddColumn(conn, "Advisors", "OtherNames", "TEXT");
+        TryAddColumn(conn, "Advisors", "IsFavorited", "INTEGER DEFAULT 0");
 
         // EmploymentHistory new columns
         TryAddColumn(conn, "EmploymentHistory", "Street", "TEXT");
@@ -228,6 +229,10 @@ public class DatabaseContext : IDisposable
         // Covering index for active-only queries (skips excluded rows at index level)
         TryCreateIndex(conn, "idx_adv_active_state_type",
             "CREATE INDEX IF NOT EXISTS idx_adv_active_state_type ON Advisors(State, RecordType, LastName) WHERE IsExcluded = 0");
+
+        // Partial index for favorited advisors
+        TryCreateIndex(conn, "idx_adv_favorited",
+            "CREATE INDEX IF NOT EXISTS idx_adv_favorited ON Advisors(IsFavorited) WHERE IsFavorited = 1");
 
         // Related data lookup indices (used by N+1 fix and detail view)
         TryCreateIndex(conn, "idx_emp_advisor",

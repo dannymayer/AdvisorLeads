@@ -24,7 +24,8 @@ public class AdvisorRepository
                    CurrentFirmName, CurrentFirmCrd, CurrentFirmId, RegistrationStatus,
                    RegistrationDate, YearsOfExperience, HasDisclosures, DisclosureCount,
                    Source, IsExcluded, ExclusionReason, IsImportedToCrm, CrmId,
-                   CreatedAt, UpdatedAt, RecordType, Suffix, IapdLink, RegAuthorities, DisclosureFlags, OtherNames
+                   CreatedAt, UpdatedAt, RecordType, Suffix, IapdLink, RegAuthorities, DisclosureFlags, OtherNames,
+                   IsFavorited
             FROM Advisors WHERE 1=1");
 
         var parameters = new List<(string name, object value)>();
@@ -134,6 +135,11 @@ public class AdvisorRepository
             parameters.Add(("@minDisc", filter.MinDisclosureCount.Value));
         }
 
+        if (filter.ShowFavoritesOnly)
+        {
+            sb.Append(" AND IsFavorited = 1");
+        }
+
         var sortCol = filter.SortBy switch
         {
             "FirstName" => "FirstName",
@@ -173,7 +179,8 @@ public class AdvisorRepository
                    CurrentFirmName, CurrentFirmCrd, CurrentFirmId, RegistrationStatus,
                    RegistrationDate, YearsOfExperience, HasDisclosures, DisclosureCount,
                    Source, IsExcluded, ExclusionReason, IsImportedToCrm, CrmId,
-                   CreatedAt, UpdatedAt, RecordType, Suffix, IapdLink, RegAuthorities, DisclosureFlags, OtherNames
+                   CreatedAt, UpdatedAt, RecordType, Suffix, IapdLink, RegAuthorities, DisclosureFlags, OtherNames,
+                   IsFavorited
             FROM Advisors WHERE Id = @id";
         cmd.Parameters.AddWithValue("@id", id);
         using var reader = cmd.ExecuteReader();
@@ -350,6 +357,16 @@ public class AdvisorRepository
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "UPDATE Advisors SET IsImportedToCrm = 1, CrmId = @crmId, UpdatedAt = datetime('now') WHERE Id = @id";
         cmd.Parameters.AddWithValue("@crmId", (object?)crmId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.ExecuteNonQuery();
+    }
+
+    public void SetAdvisorFavorited(int id, bool favorited)
+    {
+        var conn = _context.GetConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Advisors SET IsFavorited = @favorited WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@favorited", favorited ? 1 : 0);
         cmd.Parameters.AddWithValue("@id", id);
         cmd.ExecuteNonQuery();
     }
@@ -1007,6 +1024,11 @@ public class AdvisorRepository
             parameters.Add(("@minDisc", filter.MinDisclosureCount.Value));
         }
 
+        if (filter.ShowFavoritesOnly)
+        {
+            sb.Append(" AND IsFavorited = 1");
+        }
+
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sb.ToString();
         foreach (var (name, value) in parameters)
@@ -1053,7 +1075,8 @@ public class AdvisorRepository
             IapdLink = r.FieldCount > 31 && !r.IsDBNull(31) ? r.GetString(31) : null,
             RegAuthorities = r.FieldCount > 32 && !r.IsDBNull(32) ? r.GetString(32) : null,
             DisclosureFlags = r.FieldCount > 33 && !r.IsDBNull(33) ? r.GetString(33) : null,
-            OtherNames = r.FieldCount > 34 && !r.IsDBNull(34) ? r.GetString(34) : null
+            OtherNames = r.FieldCount > 34 && !r.IsDBNull(34) ? r.GetString(34) : null,
+            IsFavorited = r.FieldCount > 35 && r.GetInt32(35) == 1
         };
     }
 

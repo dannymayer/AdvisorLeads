@@ -147,6 +147,7 @@ public class MainForm : Form
         _detailCard.ImportCrmRequested += OnImportCrmRequested;
         _detailCard.RefreshRequested += OnRefreshRequested;
         _detailCard.AddToListRequested += (_, advisor) => OnAddToList(advisor);
+        _detailCard.FavoriteRequested += OnFavoriteRequested;
         _contentSplit.Panel2.Controls.Add(_detailCard);
 
         // Content split for firms: list | detail
@@ -318,6 +319,8 @@ public class MainForm : Form
         contextMenu.Items.Add("Refresh Data", null, (_, _) => { if (_selectedAdvisor != null) OnRefreshRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("Add to List...", null, (_, _) => { if (_selectedAdvisor != null) OnAddToList(_selectedAdvisor); });
         contextMenu.Items.Add("-");
+        contextMenu.Items.Add("☆ Toggle Favorite", null, (_, _) => { if (_selectedAdvisor != null) OnFavoriteRequested(this, _selectedAdvisor); });
+        contextMenu.Items.Add("-");
         contextMenu.Items.Add("Import to Wealthbox", null, (_, _) => { if (_selectedAdvisor != null) OnImportCrmRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("-");
         contextMenu.Items.Add("Exclude from Results", null, (_, _) => { if (_selectedAdvisor != null) OnExcludeRequested(this, _selectedAdvisor); });
@@ -475,7 +478,8 @@ public class MainForm : Form
 
     private ListViewItem BuildListViewItem(Advisor advisor)
     {
-        var item = new ListViewItem(advisor.FullName);
+        var name = advisor.IsFavorited ? "★ " + advisor.FullName : advisor.FullName;
+        var item = new ListViewItem(name);
         item.SubItems.Add(advisor.RecordType ?? "");
         item.SubItems.Add(advisor.CrdNumber ?? "");
         item.SubItems.Add(advisor.CurrentFirmName ?? "");
@@ -493,6 +497,10 @@ public class MainForm : Form
         {
             item.ForeColor = Color.Gray;
             item.Font = new Font("Segoe UI", 9, FontStyle.Strikeout);
+        }
+        else if (advisor.IsFavorited)
+        {
+            item.BackColor = Color.FromArgb(255, 250, 200);
         }
         else if (advisor.HasDisclosures)
         {
@@ -751,6 +759,18 @@ public class MainForm : Form
             LoadAdvisors();
             SetStatus($"{advisor.FullName} restored.");
         }
+    }
+
+    private void OnFavoriteRequested(object? sender, Advisor advisor)
+    {
+        bool newState = !advisor.IsFavorited;
+        _repo.SetAdvisorFavorited(advisor.Id, newState);
+        LoadAdvisors();
+        if (_selectedAdvisor?.Id == advisor.Id)
+            ShowAdvisorDetail(advisor.Id);
+        SetStatus(newState
+            ? $"★ {advisor.FullName} added to favorites."
+            : $"☆ {advisor.FullName} removed from favorites.");
     }
 
     private async void OnImportCrmRequested(object? sender, Advisor advisor)

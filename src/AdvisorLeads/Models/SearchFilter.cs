@@ -11,6 +11,7 @@ public class SearchFilter
     public string? LicenseType { get; set; }
     public bool? HasDisclosures { get; set; }
     public bool IncludeExcluded { get; set; } = false;
+    public bool ShowFavoritesOnly { get; set; } = false;
     public bool? IsImportedToCrm { get; set; }
     public string? Source { get; set; }
     // "Investment Advisor Representative", "Registered Representative", "Investment Advisor", "Broker-Dealer"
