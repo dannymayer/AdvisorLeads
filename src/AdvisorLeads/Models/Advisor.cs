@@ -35,6 +35,7 @@ public class Advisor
     public string? DisclosureFlags { get; set; } // comma-joined Y disclosure types e.g. "Criminal,Judgment"
     public bool IsExcluded { get; set; }
     public string? ExclusionReason { get; set; }
+    public bool IsFavorited { get; set; }
     public bool IsImportedToCrm { get; set; }
     public string? CrmId { get; set; }
     public DateTime CreatedAt { get; set; }

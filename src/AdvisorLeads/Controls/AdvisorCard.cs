@@ -28,10 +28,12 @@ public class AdvisorCard : Panel
     private static readonly Color SelectedBorder = Color.FromArgb(0, 120, 212);
     private static readonly Color HoverBg = Color.FromArgb(245, 247, 250);
     private static readonly Color DefaultBg = Color.White;
+    private static readonly Color FavoriteBg = Color.FromArgb(255, 252, 220);
     private static readonly Color ExcludedBg = Color.FromArgb(248, 248, 248);
     private static readonly Color DisclosureAccent = Color.FromArgb(230, 126, 34);
     private static readonly Color ActiveIarAccent = Color.FromArgb(39, 174, 96);
     private static readonly Color ImportedAccent = Color.FromArgb(100, 60, 160);
+    private static readonly Color FavoriteAccent = Color.FromArgb(255, 180, 0);
     private static readonly Color DefaultAccent = Color.FromArgb(180, 190, 200);
     private static readonly Color ExcludedText = Color.FromArgb(160, 160, 160);
     private static readonly Color SubtleText = Color.FromArgb(120, 130, 140);
@@ -203,6 +205,7 @@ public class AdvisorCard : Panel
     {
         if (_advisor == null) return DefaultAccent;
         if (_advisor.IsExcluded) return ExcludedText;
+        if (_advisor.IsFavorited) return FavoriteAccent;
         if (_advisor.HasDisclosures) return DisclosureAccent;
         if (!_advisor.IsImportedToCrm
             && _advisor.RegistrationStatus == "Active"
@@ -218,7 +221,9 @@ public class AdvisorCard : Panel
         var g = e.Graphics;
 
         // Card background
-        var bg = _advisor?.IsExcluded == true ? ExcludedBg : DefaultBg;
+        var bg = _advisor?.IsExcluded == true ? ExcludedBg
+               : _advisor?.IsFavorited == true ? FavoriteBg
+               : DefaultBg;
         using var bgBrush = new SolidBrush(bg);
         g.FillRectangle(bgBrush, ClientRectangle);
 
@@ -234,13 +239,24 @@ public class AdvisorCard : Panel
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
         g.DrawRectangle(pen, rect);
 
-        // Disclosure count indicator (top-right corner)
+        // Favorite star indicator (top-right corner)
+        if (_advisor != null && _advisor.IsFavorited)
+        {
+            using var starFont = new Font("Segoe UI", 12f, FontStyle.Bold);
+            using var starBrush = new SolidBrush(FavoriteAccent);
+            var starSize = g.MeasureString("★", starFont);
+            g.DrawString("★", starFont, starBrush,
+                Width - (int)starSize.Width - 6, CardPadding - 4);
+        }
+
+        // Disclosure count indicator (top-right corner, offset when star present)
         if (_advisor != null && _advisor.HasDisclosures && _advisor.DisclosureCount > 0)
         {
             var text = _advisor.DisclosureCount.ToString();
             using var font = new Font("Segoe UI", 7.5f, FontStyle.Bold);
             var size = g.MeasureString(text, font);
-            int cx = Width - (int)size.Width - 12;
+            int offset = _advisor.IsFavorited ? 28 : 0;
+            int cx = Width - (int)size.Width - 12 - offset;
             int cy = CardPadding;
             using var discBg = new SolidBrush(Color.FromArgb(230, 126, 34));
             g.FillEllipse(discBg, cx - 3, cy - 1, size.Width + 6, size.Height + 2);
@@ -257,6 +273,10 @@ public class AdvisorCard : Panel
     private void OnMouseHover(bool hovering)
     {
         if (_isSelected) return;
+        if (hovering)
+            BackColor = HoverBg;
+        else
+            BackColor = _advisor?.IsFavorited == true ? FavoriteBg : DefaultBg;
         BackColor = hovering ? HoverBg : DefaultBg;
     }
 }

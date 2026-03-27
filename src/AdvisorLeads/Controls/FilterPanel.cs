@@ -21,6 +21,7 @@ public partial class FilterPanel : UserControl
     private NumericUpDown _numMinDisclosures = null!;
     private ComboBox _cboCrm = null!;
     private CheckBox _chkShowExcluded = null!;
+    private CheckBox _chkFavoritesOnly = null!;
     private Button _btnApply = null!;
     private Button _btnClear = null!;
     private Label _lblBadge = null!;
@@ -42,7 +43,7 @@ public partial class FilterPanel : UserControl
         {
             Dock = DockStyle.Top,
             ColumnCount = 2,
-            RowCount = 26,
+            RowCount = 27,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Padding = new Padding(6, 4, 6, 8),
@@ -186,6 +187,17 @@ public partial class FilterPanel : UserControl
         layout.SetColumnSpan(_chkShowExcluded, 2);
         layout.Controls.Add(_chkShowExcluded, 0, row++);
 
+        _chkFavoritesOnly = new CheckBox
+        {
+            Text = "⭐ Favorites Only",
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = Color.FromArgb(160, 100, 0),
+            Margin = new Padding(0, 2, 4, 4)
+        };
+        layout.SetColumnSpan(_chkFavoritesOnly, 2);
+        layout.Controls.Add(_chkFavoritesOnly, 0, row++);
+
         // ── QUICK FILTERS ──────────────────────────────────────────────────
         AddSectionHeader(layout, "QUICK FILTERS", ref row);
 
@@ -231,6 +243,14 @@ public partial class FilterPanel : UserControl
             _suppressAutoApply = false;
             FireFiltersChanged();
         }));
+        pillsFlow.Controls.Add(MakePill("⭐ Favorites", () =>
+        {
+            _suppressAutoApply = true;
+            ClearAllControls();
+            _chkFavoritesOnly.Checked = true;
+            _suppressAutoApply = false;
+            FireFiltersChanged();
+        }, Color.FromArgb(255, 245, 180), Color.FromArgb(140, 80, 0)));
 
         layout.SetColumnSpan(pillsFlow, 2);
         layout.Controls.Add(pillsFlow, 0, row++);
@@ -285,6 +305,7 @@ public partial class FilterPanel : UserControl
             cbo.SelectedIndexChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
 
         _chkShowExcluded.CheckedChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
+        _chkFavoritesOnly.CheckedChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
 
         _numMinYears.ValueChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
         _numMaxYears.ValueChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
@@ -317,21 +338,22 @@ public partial class FilterPanel : UserControl
         layout.Controls.Add(lbl, 0, row++);
     }
 
-    private static Button MakePill(string text, Action onClick)
+    private static Button MakePill(string text, Action onClick,
+        Color? backColor = null, Color? foreColor = null)
     {
         var btn = new Button
         {
             Text = text,
             FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(228, 234, 255),
-            ForeColor = Color.FromArgb(45, 65, 155),
+            BackColor = backColor ?? Color.FromArgb(228, 234, 255),
+            ForeColor = foreColor ?? Color.FromArgb(45, 65, 155),
             Font = new Font("Segoe UI", 7.5f),
             AutoSize = true,
             Padding = new Padding(5, 2, 5, 2),
             Margin = new Padding(0, 2, 4, 2),
             Height = 24
         };
-        btn.FlatAppearance.BorderColor = Color.FromArgb(110, 140, 210);
+        btn.FlatAppearance.BorderColor = foreColor ?? Color.FromArgb(110, 140, 210);
         btn.FlatAppearance.BorderSize = 1;
         btn.Click += (_, _) => onClick();
         return btn;
@@ -386,6 +408,7 @@ public partial class FilterPanel : UserControl
         if (_numMinDisclosures.Value > 0) count++;
         if (_cboCrm.SelectedIndex > 0) count++;
         if (_chkShowExcluded.Checked) count++;
+        if (_chkFavoritesOnly.Checked) count++;
         return count;
     }
 
@@ -423,7 +446,8 @@ public partial class FilterPanel : UserControl
             MinDisclosureCount = _numMinDisclosures.Value > 0 ? (int)_numMinDisclosures.Value : null,
             IsImportedToCrm = _cboCrm.SelectedIndex == 0 ? null
                             : _cboCrm.SelectedIndex == 1 ? true : false,
-            IncludeExcluded = _chkShowExcluded.Checked
+            IncludeExcluded = _chkShowExcluded.Checked,
+            ShowFavoritesOnly = _chkFavoritesOnly.Checked
         };
     }
 
@@ -447,6 +471,7 @@ public partial class FilterPanel : UserControl
             _numMinDisclosures.Value = Math.Max(0, Math.Min(50, filter.MinDisclosureCount ?? 0));
             _cboCrm.SelectedIndex = filter.IsImportedToCrm == null ? 0 : filter.IsImportedToCrm.Value ? 1 : 2;
             _chkShowExcluded.Checked = filter.IncludeExcluded;
+            _chkFavoritesOnly.Checked = filter.ShowFavoritesOnly;
         }
         finally
         {
@@ -493,6 +518,7 @@ public partial class FilterPanel : UserControl
         _numMinDisclosures.Value = 0;
         _cboCrm.SelectedIndex = 0;
         _chkShowExcluded.Checked = false;
+        _chkFavoritesOnly.Checked = false;
     }
 
     private void OnClear(object? sender, EventArgs e)

@@ -31,12 +31,14 @@ public class AdvisorDetailCard : UserControl
     private Button _btnImportCrm = null!;
     private Button _btnRefresh = null!;
     private Button _btnAddToList = null!;
+    private Button _btnFavorite = null!;
 
     public event EventHandler<Advisor>? ExcludeRequested;
     public event EventHandler<Advisor>? RestoreRequested;
     public event EventHandler<Advisor>? ImportCrmRequested;
     public event EventHandler<Advisor>? RefreshRequested;
     public event EventHandler<Advisor>? AddToListRequested;
+    public event EventHandler<Advisor>? FavoriteRequested;
 
     public AdvisorDetailCard()
     {
@@ -208,16 +210,18 @@ public class AdvisorDetailCard : UserControl
         _btnRefresh = MakeActionButton("Refresh Data", Color.FromArgb(70, 130, 180));
         _btnImportCrm = MakeActionButton("Import to Wealthbox", Color.FromArgb(130, 80, 170));
         _btnAddToList = MakeActionButton("Add to List", Color.FromArgb(60, 140, 60));
+        _btnFavorite = MakeActionButton("☆ Favorite", Color.FromArgb(180, 130, 0));
         _btnExclude = MakeActionButton("Exclude", Color.FromArgb(200, 80, 60));
         _btnRestore = MakeActionButton("Restore", Color.FromArgb(60, 140, 70));
 
         _btnRefresh.Click += (_, _) => { if (_advisor != null) RefreshRequested?.Invoke(this, _advisor); };
         _btnImportCrm.Click += (_, _) => { if (_advisor != null) ImportCrmRequested?.Invoke(this, _advisor); };
         _btnAddToList.Click += (_, _) => { if (_advisor != null) AddToListRequested?.Invoke(this, _advisor); };
+        _btnFavorite.Click += (_, _) => { if (_advisor != null) FavoriteRequested?.Invoke(this, _advisor); };
         _btnExclude.Click += (_, _) => { if (_advisor != null) ExcludeRequested?.Invoke(this, _advisor); };
         _btnRestore.Click += (_, _) => { if (_advisor != null) RestoreRequested?.Invoke(this, _advisor); };
 
-        btnPanel.Controls.AddRange(new Control[] { _btnRefresh, _btnImportCrm, _btnAddToList, _btnExclude, _btnRestore });
+        btnPanel.Controls.AddRange(new Control[] { _btnRefresh, _btnImportCrm, _btnAddToList, _btnFavorite, _btnExclude, _btnRestore });
         mainLayout.Controls.Add(btnPanel, 0, 3);
 
         outer.Controls.Add(mainLayout);
@@ -237,6 +241,7 @@ public class AdvisorDetailCard : UserControl
         _btnRefresh.Enabled = false;
         _btnImportCrm.Enabled = false;
         _btnAddToList.Enabled = false;
+        _btnFavorite.Enabled = false;
         _btnExclude.Enabled = false;
         _btnRestore.Enabled = false;
     }
@@ -341,6 +346,11 @@ public class AdvisorDetailCard : UserControl
         _btnRefresh.Enabled = !string.IsNullOrEmpty(advisor.CrdNumber);
         _btnImportCrm.Enabled = !advisor.IsExcluded;
         _btnAddToList.Enabled = true;
+        _btnFavorite.Enabled = true;
+        _btnFavorite.Text = advisor.IsFavorited ? "★ Unfavorite" : "☆ Favorite";
+        _btnFavorite.BackColor = advisor.IsFavorited
+            ? Color.FromArgb(255, 200, 0)
+            : Color.FromArgb(180, 130, 0);
         _btnExclude.Enabled = !advisor.IsExcluded;
         _btnRestore.Enabled = advisor.IsExcluded;
         _btnImportCrm.Text = advisor.IsImportedToCrm ? "Re-import to Wealthbox" : "Import to Wealthbox";

@@ -95,6 +95,9 @@ public class AdvisorRepository
         if (filter.MinDisclosureCount.HasValue && filter.MinDisclosureCount.Value > 0)
             query = query.Where(a => a.DisclosureCount >= filter.MinDisclosureCount.Value);
 
+        if (filter.ShowFavoritesOnly)
+            query = query.Where(a => a.IsFavorited);
+
         IOrderedQueryable<Advisor> ordered = filter.SortBy switch
         {
             "FirstName" => filter.SortDescending ? query.OrderByDescending(a => a.FirstName) : query.OrderBy(a => a.FirstName),
@@ -268,6 +271,15 @@ public class AdvisorRepository
                 .SetProperty(a => a.UpdatedAt, DateTime.UtcNow));
     }
 
+    public void SetAdvisorFavorited(int id, bool favorited)
+    {
+        using var ctx = CreateContext();
+        ctx.Advisors
+            .Where(a => a.Id == id)
+            .ExecuteUpdate(s => s
+                .SetProperty(a => a.IsFavorited, favorited));
+    }
+
     private void UpsertEmploymentHistory(DatabaseContext ctx, int advisorId, List<EmploymentHistory> history)
     {
         var existing = ctx.EmploymentHistory
@@ -342,11 +354,29 @@ public class AdvisorRepository
     public List<string> GetCrdsNeedingEnrichment(int limit)
     {
         using var ctx = CreateContext();
+        // Include advisors that:
+        //   (a) have no qualifications stored yet, OR
+        //   (b) have HasDisclosures=true but no rows in the Disclosures table — the critical case
+        //       where ind_exams gave them qualifications during bulk fetch but the detail
+        //       endpoint was never called to retrieve the actual disclosure records.
+        // Disclosure-flagged advisors sort first so the most visible gaps close earliest.
+        // The Active-only restriction has been removed so inactive/terminated advisors
+        // with disclosures are also enriched.
         return ctx.Advisors.AsNoTracking()
             .Where(a => a.CrdNumber != null
-                && a.RegistrationStatus == "Active"
-                && !a.QualificationList.Any())
-            .OrderBy(a => a.UpdatedAt)
+                && !a.IsExcluded
+                && (!a.QualificationList.Any()
+                    || (a.HasDisclosures && !a.Disclosures.Any())))
+            .Select(a => new
+            {
+                a.CrdNumber,
+                a.UpdatedAt,
+                // Compute priority once in a single SQL projection so the subquery
+                // is evaluated only once (not duplicated in both WHERE and ORDER BY).
+                Priority = a.HasDisclosures && !a.Disclosures.Any() ? 0 : 1
+            })
+            .OrderBy(a => a.Priority)
+            .ThenBy(a => a.UpdatedAt)
             .Take(limit)
             .Select(a => a.CrdNumber!)
             .ToList();
@@ -686,6 +716,9 @@ public class AdvisorRepository
 
         if (filter.MinDisclosureCount.HasValue && filter.MinDisclosureCount.Value > 0)
             query = query.Where(a => a.DisclosureCount >= filter.MinDisclosureCount.Value);
+
+        if (filter.ShowFavoritesOnly)
+            query = query.Where(a => a.IsFavorited);
 
         return query.Count();
     }
