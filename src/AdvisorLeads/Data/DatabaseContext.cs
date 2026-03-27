@@ -73,6 +73,7 @@ public class DatabaseContext : DbContext
             e.Property(a => a.HasDisclosures).HasDefaultValue(false);
             e.Property(a => a.DisclosureCount).HasDefaultValue(0);
             e.Property(a => a.IsExcluded).HasDefaultValue(false);
+            e.Property(a => a.IsFavorited).HasDefaultValue(false);
             e.Property(a => a.IsImportedToCrm).HasDefaultValue(false);
             e.Property(a => a.CreatedAt).HasDefaultValueSql("datetime('now')");
             e.Property(a => a.UpdatedAt).HasDefaultValueSql("datetime('now')");

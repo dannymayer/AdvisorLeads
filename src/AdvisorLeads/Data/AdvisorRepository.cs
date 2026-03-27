@@ -95,6 +95,9 @@ public class AdvisorRepository
         if (filter.MinDisclosureCount.HasValue && filter.MinDisclosureCount.Value > 0)
             query = query.Where(a => a.DisclosureCount >= filter.MinDisclosureCount.Value);
 
+        if (filter.ShowFavoritesOnly)
+            query = query.Where(a => a.IsFavorited);
+
         IOrderedQueryable<Advisor> ordered = filter.SortBy switch
         {
             "FirstName" => filter.SortDescending ? query.OrderByDescending(a => a.FirstName) : query.OrderBy(a => a.FirstName),
@@ -266,6 +269,15 @@ public class AdvisorRepository
                 .SetProperty(a => a.IsImportedToCrm, true)
                 .SetProperty(a => a.CrmId, crmId)
                 .SetProperty(a => a.UpdatedAt, DateTime.UtcNow));
+    }
+
+    public void SetAdvisorFavorited(int id, bool favorited)
+    {
+        using var ctx = CreateContext();
+        ctx.Advisors
+            .Where(a => a.Id == id)
+            .ExecuteUpdate(s => s
+                .SetProperty(a => a.IsFavorited, favorited));
     }
 
     private void UpsertEmploymentHistory(DatabaseContext ctx, int advisorId, List<EmploymentHistory> history)
@@ -686,6 +698,9 @@ public class AdvisorRepository
 
         if (filter.MinDisclosureCount.HasValue && filter.MinDisclosureCount.Value > 0)
             query = query.Where(a => a.DisclosureCount >= filter.MinDisclosureCount.Value);
+
+        if (filter.ShowFavoritesOnly)
+            query = query.Where(a => a.IsFavorited);
 
         return query.Count();
     }

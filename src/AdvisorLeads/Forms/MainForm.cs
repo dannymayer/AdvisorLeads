@@ -148,6 +148,7 @@ public class MainForm : Form
         _detailCard.ImportCrmRequested += OnImportCrmRequested;
         _detailCard.RefreshRequested += OnRefreshRequested;
         _detailCard.AddToListRequested += (_, advisor) => OnAddToList(advisor);
+        _detailCard.FavoriteRequested += OnFavoriteRequested;
         _contentSplit.Panel2.Controls.Add(_detailCard);
 
         // Content split for firms: list | detail
@@ -303,6 +304,8 @@ public class MainForm : Form
         contextMenu.Items.Add("View Details", null, (_, _) => { if (_selectedAdvisor != null) ShowAdvisorDetail(_selectedAdvisor.Id); });
         contextMenu.Items.Add("Refresh Data", null, (_, _) => { if (_selectedAdvisor != null) OnRefreshRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("Add to List...", null, (_, _) => { if (_selectedAdvisor != null) OnAddToList(_selectedAdvisor); });
+        contextMenu.Items.Add("-");
+        contextMenu.Items.Add("☆ Toggle Favorite", null, (_, _) => { if (_selectedAdvisor != null) OnFavoriteRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("-");
         contextMenu.Items.Add("Import to Wealthbox", null, (_, _) => { if (_selectedAdvisor != null) OnImportCrmRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("-");
@@ -712,6 +715,18 @@ public class MainForm : Form
             LoadAdvisors();
             SetStatus($"{advisor.FullName} restored.");
         }
+    }
+
+    private void OnFavoriteRequested(object? sender, Advisor advisor)
+    {
+        bool newState = !advisor.IsFavorited;
+        _repo.SetAdvisorFavorited(advisor.Id, newState);
+        LoadAdvisors();
+        if (_selectedAdvisor?.Id == advisor.Id)
+            ShowAdvisorDetail(advisor.Id);
+        SetStatus(newState
+            ? $"★ {advisor.FullName} added to favorites."
+            : $"☆ {advisor.FullName} removed from favorites.");
     }
 
     private async void OnImportCrmRequested(object? sender, Advisor advisor)
