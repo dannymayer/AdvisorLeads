@@ -41,8 +41,6 @@ public class DatabaseContext : DbContext
             e.Property(f => f.BrokerProtocolMember).HasDefaultValue(false);
             e.Property(f => f.CreatedAt).HasDefaultValueSql("datetime('now')");
             e.Property(f => f.UpdatedAt).HasDefaultValueSql("datetime('now')");
-
-            e.Ignore(f => f.ToString());
         });
 
         // ── Advisors ──
@@ -66,7 +64,6 @@ public class DatabaseContext : DbContext
             e.Property(a => a.UpdatedAt).HasDefaultValueSql("datetime('now')");
 
             e.Ignore(a => a.FullName);
-            e.Ignore(a => a.ToString());
 
             e.HasOne<Firm>().WithMany()
                 .HasForeignKey(a => a.CurrentFirmId)
@@ -117,7 +114,6 @@ public class DatabaseContext : DbContext
             e.ToTable("AdvisorLists");
             e.HasKey(l => l.Id);
             e.Ignore(l => l.MemberCount);
-            e.Ignore(l => l.ToString());
             e.Property(l => l.CreatedAt).HasDefaultValueSql("datetime('now')");
             e.Property(l => l.UpdatedAt).HasDefaultValueSql("datetime('now')");
         });
