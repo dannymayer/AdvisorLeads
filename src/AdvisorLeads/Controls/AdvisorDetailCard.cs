@@ -10,6 +10,7 @@ public class AdvisorDetailCard : UserControl
     private Label _lblName = null!;
     private Label _lblCrd = null!;
     private Label _lblSourceBadge = null!;
+    private Label _lblRecordTypeBadge = null!;
     private Label _lblStatusBadge = null!;
     private Label _lblCrmBadge = null!;
     private Label _lblExcludedBadge = null!;
@@ -22,17 +23,20 @@ public class AdvisorDetailCard : UserControl
     private ListView _lstEmployment = null!;
     private ListView _lstDisclosures = null!;
     private ListView _lstQualifications = null!;
+    private ListView _lstRegistrations = null!;
 
     // Action buttons
     private Button _btnExclude = null!;
     private Button _btnRestore = null!;
     private Button _btnImportCrm = null!;
     private Button _btnRefresh = null!;
+    private Button _btnAddToList = null!;
 
     public event EventHandler<Advisor>? ExcludeRequested;
     public event EventHandler<Advisor>? RestoreRequested;
     public event EventHandler<Advisor>? ImportCrmRequested;
     public event EventHandler<Advisor>? RefreshRequested;
+    public event EventHandler<Advisor>? AddToListRequested;
 
     public AdvisorDetailCard()
     {
@@ -96,11 +100,12 @@ public class AdvisorDetailCard : UserControl
         };
 
         _lblSourceBadge = MakeBadge("", Color.FromArgb(70, 130, 180));
+        _lblRecordTypeBadge = MakeBadge("", Color.FromArgb(30, 140, 120));
         _lblStatusBadge = MakeBadge("", Color.FromArgb(60, 160, 80));
         _lblCrmBadge = MakeBadge("Wealthbox", Color.FromArgb(130, 80, 170));
         _lblExcludedBadge = MakeBadge("EXCLUDED", Color.FromArgb(200, 60, 60));
 
-        badgePanel.Controls.AddRange(new Control[] { _lblSourceBadge, _lblStatusBadge, _lblCrmBadge, _lblExcludedBadge });
+        badgePanel.Controls.AddRange(new Control[] { _lblSourceBadge, _lblRecordTypeBadge, _lblStatusBadge, _lblCrmBadge, _lblExcludedBadge });
         header.Controls.AddRange(new Control[] { _lblName, _lblCrd, badgePanel });
         mainLayout.Controls.Add(header, 0, 0);
 
@@ -140,6 +145,7 @@ public class AdvisorDetailCard : UserControl
         _lstEmployment.Columns.Add("Start", 90);
         _lstEmployment.Columns.Add("End", 90);
         _lstEmployment.Columns.Add("Position", 140);
+        _lstEmployment.Columns.Add("Location", 180);
         empPage.Controls.Add(_lstEmployment);
 
         // Disclosures tab
@@ -174,7 +180,20 @@ public class AdvisorDetailCard : UserControl
         _lstQualifications.Columns.Add("Status", 100);
         qualPage.Controls.Add(_lstQualifications);
 
-        _tabs.TabPages.AddRange(new[] { empPage, discPage, qualPage });
+        // Registrations tab
+        var regPage = new TabPage("Registrations");
+        _lstRegistrations = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            Font = new Font("Segoe UI", 9)
+        };
+        _lstRegistrations.Columns.Add("State / Authority", 200);
+        regPage.Controls.Add(_lstRegistrations);
+
+        _tabs.TabPages.AddRange(new[] { empPage, discPage, qualPage, regPage });
         mainLayout.Controls.Add(_tabs, 0, 2);
 
         // ── Action Buttons ────────────────────────────────────────────
@@ -188,15 +207,17 @@ public class AdvisorDetailCard : UserControl
 
         _btnRefresh = MakeActionButton("Refresh Data", Color.FromArgb(70, 130, 180));
         _btnImportCrm = MakeActionButton("Import to Wealthbox", Color.FromArgb(130, 80, 170));
+        _btnAddToList = MakeActionButton("Add to List", Color.FromArgb(60, 140, 60));
         _btnExclude = MakeActionButton("Exclude", Color.FromArgb(200, 80, 60));
         _btnRestore = MakeActionButton("Restore", Color.FromArgb(60, 140, 70));
 
         _btnRefresh.Click += (_, _) => { if (_advisor != null) RefreshRequested?.Invoke(this, _advisor); };
         _btnImportCrm.Click += (_, _) => { if (_advisor != null) ImportCrmRequested?.Invoke(this, _advisor); };
+        _btnAddToList.Click += (_, _) => { if (_advisor != null) AddToListRequested?.Invoke(this, _advisor); };
         _btnExclude.Click += (_, _) => { if (_advisor != null) ExcludeRequested?.Invoke(this, _advisor); };
         _btnRestore.Click += (_, _) => { if (_advisor != null) RestoreRequested?.Invoke(this, _advisor); };
 
-        btnPanel.Controls.AddRange(new Control[] { _btnRefresh, _btnImportCrm, _btnExclude, _btnRestore });
+        btnPanel.Controls.AddRange(new Control[] { _btnRefresh, _btnImportCrm, _btnAddToList, _btnExclude, _btnRestore });
         mainLayout.Controls.Add(btnPanel, 0, 3);
 
         outer.Controls.Add(mainLayout);
@@ -209,11 +230,13 @@ public class AdvisorDetailCard : UserControl
     private void SetEmpty()
     {
         _lblSourceBadge.Visible = false;
+        _lblRecordTypeBadge.Visible = false;
         _lblStatusBadge.Visible = false;
         _lblCrmBadge.Visible = false;
         _lblExcludedBadge.Visible = false;
         _btnRefresh.Enabled = false;
         _btnImportCrm.Enabled = false;
+        _btnAddToList.Enabled = false;
         _btnExclude.Enabled = false;
         _btnRestore.Enabled = false;
     }
@@ -225,11 +248,15 @@ public class AdvisorDetailCard : UserControl
         _lblName.Text = advisor.FullName;
         _lblCrd.Text = $"CRD: {advisor.CrdNumber ?? "N/A"}"
                      + (advisor.IapdNumber != null ? $"  |  IAPD: {advisor.IapdNumber}" : "")
+                     + (advisor.OtherNames != null ? $"  |  Also known as: {advisor.OtherNames}" : "")
                      + $"  |  Updated: {advisor.UpdatedAt:yyyy-MM-dd}";
 
         // Badges
         _lblSourceBadge.Text = advisor.Source ?? "";
         _lblSourceBadge.Visible = !string.IsNullOrEmpty(advisor.Source);
+
+        _lblRecordTypeBadge.Text = advisor.RecordType ?? "";
+        _lblRecordTypeBadge.Visible = !string.IsNullOrEmpty(advisor.RecordType);
 
         _lblStatusBadge.Text = advisor.RegistrationStatus ?? "";
         _lblStatusBadge.Visible = !string.IsNullOrEmpty(advisor.RegistrationStatus);
@@ -247,18 +274,26 @@ public class AdvisorDetailCard : UserControl
         AddInfoRow("Licenses:", advisor.Licenses ?? "—", "Experience:", advisor.YearsOfExperience.HasValue ? $"{advisor.YearsOfExperience} years" : "—");
         AddInfoRow("Disclosures:", advisor.HasDisclosures ? $"Yes ({advisor.DisclosureCount})" : "No",
                    "Reg. Date:", advisor.RegistrationDate.HasValue ? advisor.RegistrationDate.Value.ToString("yyyy-MM-dd") : "—");
+        if (!string.IsNullOrEmpty(advisor.RegAuthorities))
+            AddInfoRow("Reg. Authorities:", advisor.RegAuthorities, "Disc. Flags:", advisor.DisclosureFlags ?? "—");
+        else if (!string.IsNullOrEmpty(advisor.DisclosureFlags))
+            AddInfoRow("Disc. Flags:", advisor.DisclosureFlags, "", "");
         if (!string.IsNullOrEmpty(advisor.ExclusionReason))
             AddInfoRow("Excluded Reason:", advisor.ExclusionReason, "", "");
 
         // Employment
         _lstEmployment.Items.Clear();
+        _tabs.TabPages[0].Text = advisor.EmploymentHistory.Count > 0
+            ? $"Employment ({advisor.EmploymentHistory.Count})"
+            : "Employment History";
         foreach (var emp in advisor.EmploymentHistory)
         {
             var item = new ListViewItem(emp.FirmName);
             item.SubItems.Add(emp.FirmCrd ?? "");
             item.SubItems.Add(emp.StartDate?.ToString("yyyy-MM") ?? "");
-            item.SubItems.Add(emp.EndDate?.ToString("yyyy-MM") ?? "Current");
+            item.SubItems.Add(emp.IsCurrent ? "Current" : (emp.EndDate > DateTime.MinValue ? emp.EndDate!.Value.ToString("yyyy-MM") : ""));
             item.SubItems.Add(emp.Position ?? "");
+            item.SubItems.Add(emp.Street ?? "");
             if (emp.IsCurrent)
                 item.BackColor = Color.FromArgb(235, 248, 235);
             _lstEmployment.Items.Add(item);
@@ -279,6 +314,9 @@ public class AdvisorDetailCard : UserControl
 
         // Qualifications
         _lstQualifications.Items.Clear();
+        _tabs.TabPages[2].Text = advisor.QualificationList.Count > 0
+            ? $"Qualifications ({advisor.QualificationList.Count})"
+            : "Qualifications";
         foreach (var qual in advisor.QualificationList)
         {
             var item = new ListViewItem(qual.Name);
@@ -288,9 +326,21 @@ public class AdvisorDetailCard : UserControl
             _lstQualifications.Items.Add(item);
         }
 
+        // Registrations (from RegAuthorities comma-joined state names)
+        _lstRegistrations.Items.Clear();
+        if (!string.IsNullOrEmpty(advisor.RegAuthorities))
+        {
+            foreach (var state in advisor.RegAuthorities.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                _lstRegistrations.Items.Add(state);
+        }
+        _tabs.TabPages[3].Text = _lstRegistrations.Items.Count > 0
+            ? $"Registrations ({_lstRegistrations.Items.Count})"
+            : "Registrations";
+
         // Buttons
         _btnRefresh.Enabled = !string.IsNullOrEmpty(advisor.CrdNumber);
         _btnImportCrm.Enabled = !advisor.IsExcluded;
+        _btnAddToList.Enabled = true;
         _btnExclude.Enabled = !advisor.IsExcluded;
         _btnRestore.Enabled = advisor.IsExcluded;
         _btnImportCrm.Text = advisor.IsImportedToCrm ? "Re-import to Wealthbox" : "Import to Wealthbox";

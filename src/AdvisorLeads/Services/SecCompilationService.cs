@@ -14,18 +14,25 @@ public class SecCompilationService
     private readonly HttpClient _httpClient;
     private readonly string _cacheDirectory;
 
-    // SEC IAPD compilation URLs
-    private const string IndividualsDataUrl = "https://adviserinfo.sec.gov/downloads/prod/iapd/compiled/individuals/individuals.xml.gz";
-    private const string FirmsDataUrl = "https://adviserinfo.sec.gov/downloads/prod/iapd/compiled/ria/ria.xml.gz";
+    // SEC IAPD compilation download URLs — gzipped XML published by SEC/IARD
+    // If these URLs change, update them here.
+    private const string IndividualsGzUrl = "https://adviserinfo.sec.gov/downloads/prod/iapd/compiled/individuals/individuals.xml.gz";
+    private const string FirmsGzUrl       = "https://adviserinfo.sec.gov/downloads/prod/iapd/compiled/ria/ria.xml.gz";
 
     public SecCompilationService()
     {
         _httpClient = new HttpClient
         {
-            Timeout = TimeSpan.FromMinutes(30) // Large files can take time
+            Timeout = TimeSpan.FromMinutes(30)
         };
+        // Mimic a browser so the SEC server doesn't block the request
+        _httpClient.DefaultRequestHeaders.Add("User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+        _httpClient.DefaultRequestHeaders.Add("Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        _httpClient.DefaultRequestHeaders.Add("Referer",
+            "https://adviserinfo.sec.gov/");
 
-        // Store downloaded files in app data directory
         var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         _cacheDirectory = Path.Combine(appDataPath, "AdvisorLeads", "SecCache");
         Directory.CreateDirectory(_cacheDirectory);
@@ -41,7 +48,7 @@ public class SecCompilationService
         progress?.Report("SEC: Downloading individuals data file...");
 
         var xmlFilePath = await DownloadAndExtractAsync(
-            IndividualsDataUrl,
+            IndividualsGzUrl,
             "individuals.xml.gz",
             progress,
             cancellationToken);
@@ -66,7 +73,7 @@ public class SecCompilationService
         progress?.Report("SEC: Downloading firms data file...");
 
         var xmlFilePath = await DownloadAndExtractAsync(
-            FirmsDataUrl,
+            FirmsGzUrl,
             "ria.xml.gz",
             progress,
             cancellationToken);
@@ -89,25 +96,67 @@ public class SecCompilationService
         string url,
         string fileName,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? cacheExpiry = null)
     {
         try
         {
             var gzipFilePath = Path.Combine(_cacheDirectory, fileName);
             var xmlFilePath = Path.Combine(_cacheDirectory, Path.GetFileNameWithoutExtension(fileName));
+            var maxAge = cacheExpiry ?? TimeSpan.FromHours(23);
+            const long MinValidXmlBytes = 100 * 1024; // 100 KB — anything smaller is a corrupt/empty download
+
+            // Reuse cached XML only if it exists, is fresh, and has real content
+            if (File.Exists(xmlFilePath))
+            {
+                var info = new FileInfo(xmlFilePath);
+                if (info.Length < MinValidXmlBytes)
+                {
+                    progress?.Report($"SEC: Cached {Path.GetFileName(xmlFilePath)} is too small ({info.Length:N0} bytes) — deleting and re-downloading.");
+                    try { File.Delete(xmlFilePath); } catch { }
+                    try { File.Delete(gzipFilePath); } catch { }
+                }
+                else
+                {
+                    var age = DateTime.UtcNow - info.LastWriteTimeUtc;
+                    if (age < maxAge)
+                    {
+                        progress?.Report($"SEC: Using cached {Path.GetFileName(xmlFilePath)} ({age.TotalHours:F1}h old, {info.Length / (1024 * 1024):N0} MB).");
+                        return xmlFilePath;
+                    }
+                    progress?.Report($"SEC: Cache expired ({age.TotalHours:F1}h old). Re-downloading {fileName}...");
+                }
+            }
 
             // Download the .gz file
+            progress?.Report($"SEC: Connecting to {url}...");
             using (var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
             {
-                response.EnsureSuccessStatusCode();
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
+                progress?.Report($"SEC: Response {(int)response.StatusCode} {response.StatusCode}  Content-Type: {contentType}");
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                    progress?.Report($"SEC: Server returned {(int)response.StatusCode}. Response: {body[..Math.Min(300, body.Length)]}");
+                    return null;
+                }
+
+                // If the server returned HTML instead of binary, report the content so we can diagnose the URL
+                if (contentType.Contains("text/html") || contentType.Contains("text/plain"))
+                {
+                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                    progress?.Report($"SEC: Server returned HTML/text (not a gzip file). Check the URL. Response snippet: {body[..Math.Min(400, body.Length)]}");
+                    return null;
+                }
 
                 var totalBytes = response.Content.Headers.ContentLength ?? 0;
-                progress?.Report($"SEC: Downloading {fileName} ({totalBytes / (1024 * 1024):N0} MB)...");
+                progress?.Report($"SEC: Downloading {fileName} ({(totalBytes > 0 ? $"{totalBytes / (1024 * 1024):N0} MB" : "size unknown")})...");
 
-                using var fileStream = new FileStream(gzipFilePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 8192, useAsync: true);
+                using var fileStream = new FileStream(gzipFilePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 65536, useAsync: true);
                 using var downloadStream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
-                var buffer = new byte[8192];
+                var buffer = new byte[65536];
                 long bytesRead = 0;
                 int lastProgress = 0;
 
@@ -122,43 +171,66 @@ public class SecCompilationService
                     if (totalBytes > 0)
                     {
                         var currentProgress = (int)((bytesRead * 100) / totalBytes);
-                        if (currentProgress > lastProgress && currentProgress % 10 == 0)
+                        if (currentProgress > lastProgress && currentProgress % 5 == 0)
                         {
-                            progress?.Report($"SEC: Downloaded {currentProgress}% ({bytesRead / (1024 * 1024):N0} MB)...");
+                            progress?.Report($"SEC: Downloaded {currentProgress}% ({bytesRead / (1024 * 1024):N0} MB / {totalBytes / (1024 * 1024):N0} MB)...");
                             lastProgress = currentProgress;
                         }
                     }
+                    else if (bytesRead % (10 * 1024 * 1024) == 0 && bytesRead > 0)
+                    {
+                        progress?.Report($"SEC: Downloaded {bytesRead / (1024 * 1024):N0} MB...");
+                    }
+                }
+
+                progress?.Report($"SEC: Download complete ({bytesRead / (1024 * 1024):N0} MB). Checking integrity...");
+
+                if (bytesRead < MinValidXmlBytes)
+                {
+                    try { File.Delete(gzipFilePath); } catch { }
+                    progress?.Report($"SEC: Downloaded file is too small ({bytesRead:N0} bytes) — the server may have returned an error page. Check the URL.");
+                    return null;
                 }
             }
 
             progress?.Report($"SEC: Extracting {fileName}...");
 
-            // Extract the gzip file
-            using (var gzipStream = new FileStream(gzipFilePath, FileMode.Open, FileAccess.Read))
-            using (var decompressedStream = new GZipStream(gzipStream, CompressionMode.Decompress))
-            using (var outputStream = new FileStream(xmlFilePath, FileMode.Create, FileAccess.Write))
+            // Extract the gzip file; clean up partial output on error
+            try
             {
+                using var gzipStream = new FileStream(gzipFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var decompressedStream = new GZipStream(gzipStream, CompressionMode.Decompress);
+                using var outputStream = new FileStream(xmlFilePath, FileMode.Create, FileAccess.Write);
                 await decompressedStream.CopyToAsync(outputStream, cancellationToken);
+            }
+            catch
+            {
+                try { File.Delete(xmlFilePath); } catch { }
+                throw;
             }
 
             // Delete the .gz file to save space
-            File.Delete(gzipFilePath);
+            try { File.Delete(gzipFilePath); } catch { }
 
-            progress?.Report($"SEC: Extraction complete. XML file size: {new FileInfo(xmlFilePath).Length / (1024 * 1024):N0} MB");
+            var xmlSize = new FileInfo(xmlFilePath).Length;
+            progress?.Report($"SEC: Extraction complete. XML file: {xmlSize / (1024 * 1024):N0} MB");
+
+            if (xmlSize < MinValidXmlBytes)
+            {
+                try { File.Delete(xmlFilePath); } catch { }
+                progress?.Report($"SEC: Extracted XML is too small ({xmlSize:N0} bytes) — extraction may have failed.");
+                return null;
+            }
 
             return xmlFilePath;
         }
         catch (Exception ex)
         {
-            progress?.Report($"SEC: Error downloading/extracting: {ex.Message}");
+            progress?.Report($"SEC: Error downloading/extracting {fileName}: {ex.GetType().Name}: {ex.Message}");
             return null;
         }
     }
 
-    /// <summary>
-    /// Parses the individuals XML file and extracts advisor representative data.
-    /// The XML structure is based on Form U4 data.
-    /// </summary>
     private async Task<List<Advisor>> ParseIndividualsXmlAsync(
         string xmlFilePath,
         IProgress<string>? progress,
@@ -186,8 +258,7 @@ public class SecCompilationService
                     if (cancellationToken.IsCancellationRequested)
                         break;
 
-                    // Look for individual records
-                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "Individual")
+                    if (reader.NodeType == XmlNodeType.Element && reader.Name == "Indvl")
                     {
                         var advisor = ParseIndividualElement(reader.ReadSubtree());
                         if (advisor != null)
@@ -215,9 +286,6 @@ public class SecCompilationService
         return advisors;
     }
 
-    /// <summary>
-    /// Parses a single Individual XML element into an Advisor object.
-    /// </summary>
     private Advisor? ParseIndividualElement(XmlReader reader)
     {
         try
@@ -225,12 +293,19 @@ public class SecCompilationService
             var advisor = new Advisor
             {
                 Source = "SEC",
+                RecordType = "Investment Advisor Representative",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
                 EmploymentHistory = new List<EmploymentHistory>(),
                 Disclosures = new List<Disclosure>(),
                 QualificationList = new List<Qualification>()
             };
+
+            var regAuthorities = new List<string>();
+            var licenses = new List<string>();
+            var disclosureFlags = new List<string>();
+            bool firstEmp = true;
+            bool firstRegDate = true;
 
             while (reader.Read())
             {
@@ -240,29 +315,169 @@ public class SecCompilationService
                 switch (reader.Name)
                 {
                     case "Info":
-                        ParseIndividualInfo(reader.ReadSubtree(), advisor);
+                    {
+                        advisor.LastName = reader.GetAttribute("lastNm") ?? string.Empty;
+                        advisor.FirstName = reader.GetAttribute("firstNm") ?? string.Empty;
+                        advisor.MiddleName = reader.GetAttribute("midNm");
+                        advisor.Suffix = reader.GetAttribute("sufNm");
+                        var pk = reader.GetAttribute("indvlPK");
+                        if (!string.IsNullOrWhiteSpace(pk))
+                        {
+                            advisor.CrdNumber = pk;
+                            advisor.IapdNumber = pk;
+                        }
+                        advisor.IapdLink = reader.GetAttribute("link");
                         break;
-                    case "CrdInfo":
-                        ParseCrdInfo(reader.ReadSubtree(), advisor);
+                    }
+
+                    case "CrntEmp":
+                    {
+                        var empName = reader.GetAttribute("orgNm");
+                        if (firstEmp)
+                        {
+                            advisor.CurrentFirmName = empName;
+                            advisor.CurrentFirmCrd = reader.GetAttribute("orgPK");
+                            advisor.City = reader.GetAttribute("city");
+                            advisor.State = reader.GetAttribute("state");
+                            advisor.ZipCode = reader.GetAttribute("postlCd");
+                            firstEmp = false;
+                        }
+                        if (!string.IsNullOrWhiteSpace(empName))
+                        {
+                            advisor.EmploymentHistory.Add(new EmploymentHistory
+                            {
+                                FirmName = empName,
+                                FirmCrd = reader.GetAttribute("orgPK")
+                                // EndDate left null → IsCurrent == true
+                            });
+                        }
                         break;
-                    case "Employments":
-                        ParseEmployments(reader.ReadSubtree(), advisor);
+                    }
+
+                    case "CrntRgstn":
+                    {
+                        var regAuth = reader.GetAttribute("regAuth");
+                        var st = reader.GetAttribute("st");
+                        var stDt = reader.GetAttribute("stDt");
+
+                        if (!string.IsNullOrWhiteSpace(regAuth) && !regAuthorities.Contains(regAuth))
+                            regAuthorities.Add(regAuth);
+
+                        if (advisor.RegistrationStatus == null && !string.IsNullOrWhiteSpace(st))
+                            advisor.RegistrationStatus = FinraService.NormalizeStatus(st);
+
+                        if (firstRegDate && DateTime.TryParse(stDt, out var regDate))
+                        {
+                            advisor.RegistrationDate = regDate;
+                            advisor.YearsOfExperience = (int)((DateTime.Today - regDate).TotalDays / 365.25);
+                            firstRegDate = false;
+                        }
                         break;
-                    case "DRPs": // Disclosure Reporting Pages
-                        ParseDisclosures(reader.ReadSubtree(), advisor);
+                    }
+
+                    case "Exm":
+                    {
+                        var exmCd = reader.GetAttribute("exmCd");
+                        var exmNm = reader.GetAttribute("exmNm");
+                        var exmDt = reader.GetAttribute("exmDt");
+
+                        if (!string.IsNullOrWhiteSpace(exmNm))
+                        {
+                            var qual = new Qualification
+                            {
+                                Code = exmCd,
+                                Name = exmNm
+                            };
+                            if (DateTime.TryParse(exmDt, out var examDate))
+                                qual.Date = examDate;
+
+                            advisor.QualificationList.Add(qual);
+
+                            var licLabel = !string.IsNullOrWhiteSpace(exmCd) ? exmCd : exmNm;
+                            if (!licenses.Contains(licLabel))
+                                licenses.Add(licLabel);
+                        }
                         break;
-                    case "Exams":
-                        ParseExams(reader.ReadSubtree(), advisor);
+                    }
+
+                    case "EmpHs":
+                    case "EmpH":  // handle both container-child (EmpHs > EmpH) and flat (repeating EmpHs) structures
+                    {
+                        var empOrg = reader.GetAttribute("orgNm");
+                        var fromDt = reader.GetAttribute("fromDt");
+                        var toDt = reader.GetAttribute("toDt");
+
+                        if (!string.IsNullOrWhiteSpace(empOrg))
+                        {
+                            var hist = new EmploymentHistory { FirmName = empOrg };
+                            bool empIsCurrent = toDt == "99/9999";
+
+                            if (!string.IsNullOrWhiteSpace(fromDt) && fromDt != "99/9999")
+                            {
+                                var parts = fromDt.Split('/');
+                                if (parts.Length == 2 && int.TryParse(parts[0], out var month) && int.TryParse(parts[1], out var year) && year > 1900)
+                                    hist.StartDate = new DateTime(year, Math.Clamp(month, 1, 12), 1);
+                            }
+                            if (!empIsCurrent && !string.IsNullOrWhiteSpace(toDt))
+                            {
+                                var parts = toDt.Split('/');
+                                if (parts.Length == 2 && int.TryParse(parts[0], out var month) && int.TryParse(parts[1], out var year) && year > 1900)
+                                    hist.EndDate = new DateTime(year, Math.Clamp(month, 1, 12), 1);
+                            }
+                            // IsCurrent is computed as EndDate == null; for empIsCurrent, EndDate stays null
+
+                            if (!advisor.EmploymentHistory.Any(h => h.FirmName == empOrg && h.IsCurrent == empIsCurrent))
+                                advisor.EmploymentHistory.Add(hist);
+                        }
                         break;
+                    }
+
+                    case "DRP":
+                    {
+                        var flagMap = new (string attr, string label)[]
+                        {
+                            ("hasRegAction", "Regulatory Action"),
+                            ("hasCriminal", "Criminal"),
+                            ("hasBankrupt", "Bankruptcy"),
+                            ("hasCivilJudc", "Civil Judgment"),
+                            ("hasBond", "Bond"),
+                            ("hasJudgment", "Judgment"),
+                            ("hasInvstgn", "Investigation"),
+                            ("hasCustComp", "Customer Complaint"),
+                            ("hasTermination", "Termination")
+                        };
+
+                        var newFlags = new List<string>();
+                        foreach (var (attr, label) in flagMap)
+                        {
+                            if (reader.GetAttribute(attr) == "Y")
+                                newFlags.Add(label);
+                        }
+
+                        if (newFlags.Count > 0)
+                        {
+                            disclosureFlags.AddRange(newFlags.Where(f => !disclosureFlags.Contains(f)));
+                            advisor.HasDisclosures = true;
+                            advisor.Disclosures.Add(new Disclosure
+                            {
+                                Type = "DRP Summary",
+                                Description = string.Join("; ", newFlags),
+                                Source = "SEC"
+                            });
+                        }
+                        break;
+                    }
                 }
             }
 
-            // Only return if we have at least a CRD number and name
+            advisor.RegAuthorities = regAuthorities.Count > 0 ? string.Join(",", regAuthorities) : null;
+            advisor.Licenses = licenses.Count > 0 ? string.Join(", ", licenses) : null;
+            advisor.DisclosureFlags = disclosureFlags.Count > 0 ? string.Join(",", disclosureFlags) : null;
+            advisor.DisclosureCount = advisor.Disclosures.Count;
+
             if (string.IsNullOrWhiteSpace(advisor.CrdNumber) ||
                 (string.IsNullOrWhiteSpace(advisor.FirstName) && string.IsNullOrWhiteSpace(advisor.LastName)))
-            {
                 return null;
-            }
 
             return advisor;
         }
@@ -272,206 +487,6 @@ public class SecCompilationService
         }
     }
 
-    private void ParseIndividualInfo(XmlReader reader, Advisor advisor)
-    {
-        while (reader.Read())
-        {
-            if (reader.NodeType != XmlNodeType.Element)
-                continue;
-
-            switch (reader.Name)
-            {
-                case "FirstName":
-                    advisor.FirstName = reader.ReadElementContentAsString();
-                    break;
-                case "MiddleName":
-                    advisor.MiddleName = reader.ReadElementContentAsString();
-                    break;
-                case "LastName":
-                    advisor.LastName = reader.ReadElementContentAsString();
-                    break;
-            }
-        }
-    }
-
-    private void ParseCrdInfo(XmlReader reader, Advisor advisor)
-    {
-        while (reader.Read())
-        {
-            if (reader.NodeType != XmlNodeType.Element)
-                continue;
-
-            if (reader.Name == "CrdNumber")
-            {
-                advisor.CrdNumber = reader.ReadElementContentAsString();
-            }
-        }
-    }
-
-    private void ParseEmployments(XmlReader reader, Advisor advisor)
-    {
-        while (reader.Read())
-        {
-            if (reader.NodeType == XmlNodeType.Element && reader.Name == "Employment")
-            {
-                var employment = ParseEmployment(reader.ReadSubtree());
-                if (employment != null)
-                {
-                    advisor.EmploymentHistory.Add(employment);
-
-                    // Set current firm if this is the current employment
-                    if (employment.IsCurrent)
-                    {
-                        advisor.CurrentFirmName = employment.FirmName;
-                        advisor.CurrentFirmCrd = employment.FirmCrd;
-                    }
-                }
-            }
-        }
-    }
-
-    private EmploymentHistory? ParseEmployment(XmlReader reader)
-    {
-        var employment = new EmploymentHistory();
-
-        while (reader.Read())
-        {
-            if (reader.NodeType != XmlNodeType.Element)
-                continue;
-
-            switch (reader.Name)
-            {
-                case "OrgName":
-                    employment.FirmName = reader.ReadElementContentAsString();
-                    break;
-                case "OrgCrdNumber":
-                    employment.FirmCrd = reader.ReadElementContentAsString();
-                    break;
-                case "StartDate":
-                    if (DateTime.TryParse(reader.ReadElementContentAsString(), out var startDate))
-                        employment.StartDate = startDate;
-                    break;
-                case "EndDate":
-                    var endDateStr = reader.ReadElementContentAsString();
-                    if (!string.IsNullOrWhiteSpace(endDateStr) && DateTime.TryParse(endDateStr, out var endDate))
-                        employment.EndDate = endDate;
-                    break;
-                case "Position":
-                    employment.Position = reader.ReadElementContentAsString();
-                    break;
-            }
-        }
-
-        return string.IsNullOrWhiteSpace(employment.FirmName) ? null : employment;
-    }
-
-    private void ParseDisclosures(XmlReader reader, Advisor advisor)
-    {
-        while (reader.Read())
-        {
-            if (reader.NodeType == XmlNodeType.Element && reader.Name == "DRP")
-            {
-                var disclosure = ParseDisclosure(reader.ReadSubtree());
-                if (disclosure != null)
-                {
-                    advisor.Disclosures.Add(disclosure);
-                    advisor.HasDisclosures = true;
-                }
-            }
-        }
-
-        advisor.DisclosureCount = advisor.Disclosures.Count;
-    }
-
-    private Disclosure? ParseDisclosure(XmlReader reader)
-    {
-        var disclosure = new Disclosure
-        {
-            Source = "SEC"
-        };
-
-        while (reader.Read())
-        {
-            if (reader.NodeType != XmlNodeType.Element)
-                continue;
-
-            switch (reader.Name)
-            {
-                case "DRPType":
-                    disclosure.Type = reader.ReadElementContentAsString();
-                    break;
-                case "AllegationDesc":
-                    disclosure.Description = reader.ReadElementContentAsString();
-                    break;
-                case "Date":
-                    if (DateTime.TryParse(reader.ReadElementContentAsString(), out var date))
-                        disclosure.Date = date;
-                    break;
-                case "Resolution":
-                    disclosure.Resolution = reader.ReadElementContentAsString();
-                    break;
-                case "Sanctions":
-                    disclosure.Sanctions = reader.ReadElementContentAsString();
-                    break;
-            }
-        }
-
-        return disclosure;
-    }
-
-    private void ParseExams(XmlReader reader, Advisor advisor)
-    {
-        var licenses = new List<string>();
-
-        while (reader.Read())
-        {
-            if (reader.NodeType == XmlNodeType.Element && reader.Name == "Exam")
-            {
-                var examSubtree = reader.ReadSubtree();
-                while (examSubtree.Read())
-                {
-                    if (examSubtree.NodeType == XmlNodeType.Element)
-                    {
-                        switch (examSubtree.Name)
-                        {
-                            case "ExamName":
-                                var examName = examSubtree.ReadElementContentAsString();
-                                if (!string.IsNullOrWhiteSpace(examName))
-                                {
-                                    licenses.Add(examName);
-
-                                    // Also add to qualifications list
-                                    var qual = new Qualification
-                                    {
-                                        Name = examName,
-                                        Code = examName
-                                    };
-                                    advisor.QualificationList.Add(qual);
-                                }
-                                break;
-                            case "ExamDate":
-                                if (advisor.QualificationList.Count > 0 &&
-                                    DateTime.TryParse(examSubtree.ReadElementContentAsString(), out var examDate))
-                                {
-                                    advisor.QualificationList.Last().Date = examDate;
-                                }
-                                break;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (licenses.Count > 0)
-        {
-            advisor.Licenses = string.Join(", ", licenses);
-        }
-    }
-
-    /// <summary>
-    /// Parses the firms XML file and extracts investment advisor firm data.
-    /// The XML structure is based on Form ADV data.
-    /// </summary>
     private async Task<List<Firm>> ParseFirmsXmlAsync(
         string xmlFilePath,
         IProgress<string>? progress,
@@ -499,7 +514,6 @@ public class SecCompilationService
                     if (cancellationToken.IsCancellationRequested)
                         break;
 
-                    // Look for firm records (RIA)
                     if (reader.NodeType == XmlNodeType.Element && reader.Name == "Firm")
                     {
                         var firm = ParseFirmElement(reader.ReadSubtree());
@@ -528,9 +542,6 @@ public class SecCompilationService
         return firms;
     }
 
-    /// <summary>
-    /// Parses a single Firm XML element into a Firm object.
-    /// </summary>
     private Firm? ParseFirmElement(XmlReader reader)
     {
         try
@@ -538,32 +549,125 @@ public class SecCompilationService
             var firm = new Firm
             {
                 Source = "SEC",
+                RecordType = "Investment Advisor",
                 IsRegisteredWithSec = true,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
 
+            bool inItem1 = false;
+
             while (reader.Read())
             {
+                if (reader.NodeType == XmlNodeType.EndElement)
+                {
+                    if (reader.Name == "Item1") inItem1 = false;
+                    continue;
+                }
+
+                if (reader.NodeType != XmlNodeType.Element && reader.NodeType != XmlNodeType.Text)
+                    continue;
+
+                if (reader.NodeType == XmlNodeType.Text && inItem1)
+                {
+                    var val = reader.Value?.Trim();
+                    if (!string.IsNullOrWhiteSpace(val) && string.IsNullOrEmpty(firm.Website))
+                        firm.Website = val;
+                    continue;
+                }
+
                 if (reader.NodeType != XmlNodeType.Element)
                     continue;
 
                 switch (reader.Name)
                 {
                     case "Info":
-                        ParseFirmInfo(reader.ReadSubtree(), firm);
+                        firm.CrdNumber = reader.GetAttribute("FirmCrdNb") ?? string.Empty;
+                        firm.SECNumber = reader.GetAttribute("SECNb");
+                        firm.Name = reader.GetAttribute("BusNm") ?? string.Empty;
+                        firm.LegalName = reader.GetAttribute("LegalNm");
+                        firm.SECRegion = reader.GetAttribute("SECRgnCD");
                         break;
-                    case "MainAddress":
-                        ParseFirmAddress(reader.ReadSubtree(), firm);
+
+                    case "MainAddr":
+                    {
+                        var strt1 = reader.GetAttribute("Strt1") ?? string.Empty;
+                        var strt2 = reader.GetAttribute("Strt2") ?? string.Empty;
+                        firm.Address = string.IsNullOrWhiteSpace(strt2)
+                            ? strt1
+                            : string.Join(", ", new[] { strt1, strt2 }.Where(s => !string.IsNullOrWhiteSpace(s)));
+                        firm.City = reader.GetAttribute("City");
+                        firm.State = reader.GetAttribute("State");
+                        firm.ZipCode = reader.GetAttribute("PostlCd");
+                        firm.Phone = reader.GetAttribute("PhNb");
+                        firm.FaxPhone = reader.GetAttribute("FaxNb");
+                        break;
+                    }
+
+                    case "MailingAddr":
+                    {
+                        var mStrt1 = reader.GetAttribute("Strt1") ?? string.Empty;
+                        var mStrt2 = reader.GetAttribute("Strt2") ?? string.Empty;
+                        var mCity = reader.GetAttribute("City") ?? string.Empty;
+                        var mState = reader.GetAttribute("State") ?? string.Empty;
+                        var mZip = reader.GetAttribute("PostlCd") ?? string.Empty;
+                        var mailParts = new[] { mStrt1, mStrt2, mCity, mState, mZip }
+                            .Where(s => !string.IsNullOrWhiteSpace(s));
+                        var mailing = string.Join(", ", mailParts);
+                        firm.MailingAddress = string.IsNullOrWhiteSpace(mailing) ? null : mailing;
+                        break;
+                    }
+
+                    case "Rgstn":
+                    {
+                        var firmType = reader.GetAttribute("FirmType");
+                        firm.RegistrationStatus = reader.GetAttribute("St");
+                        if (DateTime.TryParse(reader.GetAttribute("Dt"), out var regDt))
+                            firm.RegistrationDate = regDt;
+                        if (!string.IsNullOrWhiteSpace(firmType) && string.IsNullOrWhiteSpace(firm.BusinessType))
+                            firm.BusinessType = firmType;
+                        break;
+                    }
+
+                    case "Item1":
+                        inItem1 = true;
+                        firm.AumDescription = reader.GetAttribute("Q1ODesc");
+                        break;
+
+                    case "WebAddr":
+                        if (!reader.IsEmptyElement)
+                        {
+                            try
+                            {
+                                var webVal = reader.ReadElementContentAsString()?.Trim();
+                                if (!string.IsNullOrWhiteSpace(webVal) && string.IsNullOrEmpty(firm.Website))
+                                    firm.Website = webVal;
+                            }
+                            catch { }
+                        }
+                        break;
+
+                    case "Item3A":
+                    {
+                        var orgForm = reader.GetAttribute("OrgFormNm");
+                        if (!string.IsNullOrWhiteSpace(orgForm))
+                            firm.BusinessType = orgForm;
+                        break;
+                    }
+
+                    case "Item3C":
+                        firm.StateOfOrganization = reader.GetAttribute("StateCD");
+                        break;
+
+                    case "Item5A":
+                        if (int.TryParse(reader.GetAttribute("TtlEmp"), out var emp) && emp > 0)
+                            firm.NumberOfAdvisors = emp;
                         break;
                 }
             }
 
-            // Only return if we have at least a CRD number and name
             if (string.IsNullOrWhiteSpace(firm.CrdNumber) || string.IsNullOrWhiteSpace(firm.Name))
-            {
                 return null;
-            }
 
             return firm;
         }
@@ -573,78 +677,15 @@ public class SecCompilationService
         }
     }
 
-    private void ParseFirmInfo(XmlReader reader, Firm firm)
+    private static string ExpandRegistrationStatus(string code) => code switch
     {
-        while (reader.Read())
-        {
-            if (reader.NodeType != XmlNodeType.Element)
-                continue;
-
-            switch (reader.Name)
-            {
-                case "FirmCrdNumber":
-                    firm.CrdNumber = reader.ReadElementContentAsString();
-                    break;
-                case "BusName":
-                case "LegalName":
-                    var name = reader.ReadElementContentAsString();
-                    if (!string.IsNullOrWhiteSpace(name))
-                        firm.Name = name;
-                    break;
-                case "Website":
-                    firm.Website = reader.ReadElementContentAsString();
-                    break;
-                case "RegistrationDate":
-                    if (DateTime.TryParse(reader.ReadElementContentAsString(), out var regDate))
-                        firm.RegistrationDate = regDate;
-                    break;
-            }
-        }
-    }
-
-    private void ParseFirmAddress(XmlReader reader, Firm firm)
-    {
-        var addressParts = new List<string>();
-
-        while (reader.Read())
-        {
-            if (reader.NodeType != XmlNodeType.Element)
-                continue;
-
-            switch (reader.Name)
-            {
-                case "Street1":
-                case "Street2":
-                    var street = reader.ReadElementContentAsString();
-                    if (!string.IsNullOrWhiteSpace(street))
-                        addressParts.Add(street);
-                    break;
-                case "City":
-                    firm.City = reader.ReadElementContentAsString();
-                    break;
-                case "State":
-                    firm.State = reader.ReadElementContentAsString();
-                    break;
-                case "Country":
-                    // Store country in address if not US
-                    var country = reader.ReadElementContentAsString();
-                    if (!string.IsNullOrWhiteSpace(country) && country != "US" && country != "USA")
-                        addressParts.Add(country);
-                    break;
-                case "PostalCode":
-                    firm.ZipCode = reader.ReadElementContentAsString();
-                    break;
-                case "PhoneNumber":
-                    firm.Phone = reader.ReadElementContentAsString();
-                    break;
-            }
-        }
-
-        if (addressParts.Count > 0)
-        {
-            firm.Address = string.Join(", ", addressParts);
-        }
-    }
+        "A" => "Active",
+        "I" => "Inactive",
+        "T" => "Terminated",
+        "B" => "Barred",
+        "S" => "Suspended",
+        _ => string.IsNullOrWhiteSpace(code) ? "Unknown" : code
+    };
 
     /// <summary>
     /// Clears cached SEC data files to force fresh download.

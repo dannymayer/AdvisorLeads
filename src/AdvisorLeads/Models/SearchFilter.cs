@@ -13,8 +13,15 @@ public class SearchFilter
     public bool IncludeExcluded { get; set; } = false;
     public bool? IsImportedToCrm { get; set; }
     public string? Source { get; set; }
+    // "Investment Advisor Representative", "Registered Representative", "Investment Advisor", "Broker-Dealer"
+    public string? RecordType { get; set; }
     public int? MinYearsExperience { get; set; }
     public int? MaxYearsExperience { get; set; }
+    public string? City { get; set; }
+    public int? MinDisclosureCount { get; set; }
+    public string? FirmRecordType { get; set; }
     public string? SortBy { get; set; } = "LastName";
     public bool SortDescending { get; set; } = false;
+    public int PageSize { get; set; } = 500;
+    public int PageNumber { get; set; } = 1;
 }

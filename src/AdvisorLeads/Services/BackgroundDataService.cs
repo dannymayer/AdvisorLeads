@@ -15,6 +15,8 @@ public class BackgroundDataService
     private readonly SecCompilationService _sec;
     private readonly AdvisorRepository _repo;
     private SecMonthlyFirmService? _secMonthly;
+    private BrokerProtocolService? _brokerProtocol;
+    private SecIapdEnrichmentService? _secIapd;
     private CancellationTokenSource? _cts;
     private Task? _refreshTask;
 
@@ -29,6 +31,8 @@ public class BackgroundDataService
     }
 
     public void SetSecMonthlyService(SecMonthlyFirmService s) => _secMonthly = s;
+    public void SetBrokerProtocolService(BrokerProtocolService s) => _brokerProtocol = s;
+    public void SetIapdService(SecIapdEnrichmentService s) => _secIapd = s;
 
     /// <summary>
     /// Returns true if the database has already been populated with advisor data.
@@ -290,4 +294,59 @@ public class BackgroundDataService
         return 0;
     }
 
+    /// <summary>
+    /// Runs a batch of SEC IAPD enrichment for advisors missing qualifications/employment.
+    /// Safe to call multiple times — GetCrdsNeedingIapdEnrichment returns empty when caught up.
+    /// </summary>
+    public async Task<int> RunIapdEnrichmentAsync(
+        IProgress<string>? progress = null,
+        CancellationToken ct = default,
+        int maxToProcess = 200)
+    {
+        if (_secIapd == null) return 0;
+        try
+        {
+            var count = await _secIapd.EnrichBatchAsync(progress, ct, maxToProcess);
+            if (count > 0) DataUpdated?.Invoke();
+            return count;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// Checks whether the Broker Protocol list needs updating (weekly refresh).
+    /// If so, fetches the latest member list and updates firm records.
+    /// </summary>
+    public async Task<int> CheckAndUpdateBrokerProtocolAsync(
+        Func<string, string?> getSetting,
+        Action<string, string> saveSetting,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        if (_brokerProtocol == null) return 0;
+
+        const string SettingKey = "BrokerProtocolLastFetch";
+        var lastFetch = getSetting(SettingKey);
+        if (lastFetch != null && DateTime.TryParse(lastFetch, out var last))
+        {
+            if ((DateTime.UtcNow - last).TotalDays < 7) return 0; // Not due yet
+        }
+
+        progress?.Report("Checking Broker Protocol member list...");
+        var names = await _brokerProtocol.FetchMemberNamesAsync(ct);
+
+        if (names.Count < 5)
+        {
+            progress?.Report("⚠ Broker Protocol list returned too few results — skipping update.");
+            return 0;
+        }
+
+        progress?.Report($"Updating {names.Count} Broker Protocol member firms...");
+        var updated = _repo.UpdateBrokerProtocolStatus(names, DateTime.UtcNow);
+        saveSetting(SettingKey, DateTime.UtcNow.ToString("O"));
+        progress?.Report($"✓ Marked {updated} firms as Broker Protocol members.");
+        DataUpdated?.Invoke();
+        return updated;
+    }
 }

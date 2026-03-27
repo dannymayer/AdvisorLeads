@@ -563,6 +563,42 @@ public class AdvisorRepository
         return result;
     }
 
+    /// <summary>
+    /// Returns CRD numbers for advisors that need SEC IAPD enrichment:
+    /// those without qualifications stored, prioritizing SEC-sourced records
+    /// and those not already enriched by FINRA detail fetch.
+    /// </summary>
+    public List<string> GetCrdsNeedingIapdEnrichment(int limit = 200)
+    {
+        var conn = _context.GetConnection();
+        using var cmd = conn.CreateCommand();
+        // Prioritize advisors with no qualifications AND no employment history
+        // (meaning FINRA detail fetch didn't work — IAPD enrichment is warranted).
+        // SEC-sourced records are prioritized first.
+        cmd.CommandText = @"
+            SELECT a.CrdNumber
+            FROM Advisors a
+            WHERE a.CrdNumber IS NOT NULL
+              AND a.IsExcluded = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM Qualifications q WHERE q.AdvisorId = a.Id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM EmploymentHistory e WHERE e.AdvisorId = a.Id
+              )
+            ORDER BY
+                CASE WHEN a.Source LIKE '%SEC%' THEN 0 ELSE 1 END,
+                a.UpdatedAt ASC
+            LIMIT @limit";
+        cmd.Parameters.AddWithValue("@limit", limit);
+
+        var crds = new List<string>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            crds.Add(r.GetString(0));
+        return crds;
+    }
+
     // ── Firms ─────────────────────────────────────────────────────────────
 
     public List<Firm> GetFirms(FirmSearchFilter? filter = null)
@@ -575,7 +611,9 @@ public class AdvisorRepository
                    BusinessType, IsRegisteredWithSec, IsRegisteredWithFinra, NumberOfAdvisors,
                    RegistrationDate, Source, IsExcluded, CreatedAt, UpdatedAt, RecordType,
                    SECNumber, SECRegion, LegalName, FaxPhone, MailingAddress, RegistrationStatus,
-                   AumDescription, StateOfOrganization
+                   AumDescription, StateOfOrganization, Country, NumberOfEmployees, LatestFilingDate,
+                   RegulatoryAum, RegulatoryAumNonDiscretionary, NumClients,
+                   BrokerProtocolMember, BrokerProtocolUpdatedAt
             FROM Firms WHERE IsExcluded = 0");
 
         var parameters = new List<(string name, object value)>();
@@ -604,6 +642,15 @@ public class AdvisorRepository
         {
             sb.Append(" AND NumberOfAdvisors >= @minAdv");
             parameters.Add(("@minAdv", filter.MinAdvisors.Value));
+        }
+        if (filter.BrokerProtocolOnly)
+        {
+            sb.Append(" AND BrokerProtocolMember = 1");
+        }
+        if (filter.MinRegulatoryAum.HasValue)
+        {
+            sb.Append(" AND RegulatoryAum >= @minAum");
+            parameters.Add(("@minAum", (double)filter.MinRegulatoryAum.Value));
         }
 
         var sortCol = filter.SortBy switch
@@ -655,6 +702,9 @@ public class AdvisorRepository
                     SECNumber=@secNum, SECRegion=@secRgn, LegalName=@legalNm, FaxPhone=@faxPhone,
                     MailingAddress=@mailAddr, RegistrationStatus=@regStatus,
                     AumDescription=@aumDesc, StateOfOrganization=@stateOrg,
+                    RegulatoryAum=@regAum, RegulatoryAumNonDiscretionary=@regAumNd,
+                    NumClients=@numClients, BrokerProtocolMember=@bpMember,
+                    BrokerProtocolUpdatedAt=@bpUpdated,
                     UpdatedAt=datetime('now')
                 WHERE Id = @id";
             BindFirmParams(cmd, firm);
@@ -669,11 +719,14 @@ public class AdvisorRepository
                     BusinessType, IsRegisteredWithSec, IsRegisteredWithFinra, NumberOfAdvisors,
                     RegistrationDate, Source, RecordType,
                     SECNumber, SECRegion, LegalName, FaxPhone, MailingAddress,
-                    RegistrationStatus, AumDescription, StateOfOrganization, UpdatedAt)
+                    RegistrationStatus, AumDescription, StateOfOrganization,
+                    RegulatoryAum, RegulatoryAumNonDiscretionary, NumClients,
+                    BrokerProtocolMember, BrokerProtocolUpdatedAt, UpdatedAt)
                 VALUES (@crd, @name, @addr, @city, @state, @zip, @phone, @web,
                     @btype, @sec, @finra, @numAdv, @regDate, @source, @recordType,
                     @secNum, @secRgn, @legalNm, @faxPhone, @mailAddr,
-                    @regStatus, @aumDesc, @stateOrg, datetime('now'));
+                    @regStatus, @aumDesc, @stateOrg,
+                    @regAum, @regAumNd, @numClients, @bpMember, @bpUpdated, datetime('now'));
                 SELECT last_insert_rowid();";
             cmd.Parameters.AddWithValue("@crd", (object?)firm.CrdNumber ?? DBNull.Value);
             BindFirmParams(cmd, firm);
@@ -707,6 +760,11 @@ public class AdvisorRepository
         cmd.Parameters.AddWithValue("@regStatus", (object?)f.RegistrationStatus ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@aumDesc", (object?)f.AumDescription ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@stateOrg", (object?)f.StateOfOrganization ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@regAum",     (object?)f.RegulatoryAum ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@regAumNd",   (object?)f.RegulatoryAumNonDiscretionary ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@numClients", (object?)f.NumClients ?? (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@bpMember",   f.BrokerProtocolMember ? 1 : 0);
+        cmd.Parameters.AddWithValue("@bpUpdated",  f.BrokerProtocolUpdatedAt.HasValue ? f.BrokerProtocolUpdatedAt.Value.ToString("O") : (object)DBNull.Value);
     }
 
     /// <summary>
@@ -725,12 +783,14 @@ public class AdvisorRepository
                 MailingAddress, BusinessType, StateOfOrganization,
                 RecordType, RegistrationStatus, RegistrationDate, LatestFilingDate,
                 NumberOfAdvisors, NumberOfEmployees, AumDescription,
+                RegulatoryAum, RegulatoryAumNonDiscretionary, NumClients,
                 IsRegisteredWithSec, Source, CreatedAt, UpdatedAt)
             VALUES (@crd, @name, @legal, @sec, @region,
                 @addr, @city, @state, @country, @zip, @phone, @fax, @web,
                 @mail, @btype, @stateOrg,
                 @rectype, @regstatus, @regdate, @filingdate,
                 @numadv, @numemp, @aum,
+                @regaum, @regaumnd, @numclients,
                 1, 'SEC', datetime('now'), datetime('now'))
             ON CONFLICT(CrdNumber) DO UPDATE SET
                 Name               = excluded.Name,
@@ -755,6 +815,9 @@ public class AdvisorRepository
                 NumberOfAdvisors   = coalesce(excluded.NumberOfAdvisors, NumberOfAdvisors),
                 NumberOfEmployees  = coalesce(excluded.NumberOfEmployees, NumberOfEmployees),
                 AumDescription     = coalesce(excluded.AumDescription, AumDescription),
+                RegulatoryAum      = coalesce(excluded.RegulatoryAum, RegulatoryAum),
+                RegulatoryAumNonDiscretionary = coalesce(excluded.RegulatoryAumNonDiscretionary, RegulatoryAumNonDiscretionary),
+                NumClients         = coalesce(excluded.NumClients, NumClients),
                 IsRegisteredWithSec = 1,
                 Source             = 'SEC',
                 UpdatedAt          = datetime('now')
@@ -788,6 +851,9 @@ public class AdvisorRepository
             cmd.Parameters.AddWithValue("@numadv", (object?)f.NumberOfAdvisors ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@numemp", (object?)f.NumberOfEmployees ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@aum", (object?)f.AumDescription ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@regaum", (object?)f.RegulatoryAum ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@regaumnd", (object?)f.RegulatoryAumNonDiscretionary ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@numclients", (object?)f.NumClients ?? DBNull.Value);
             cmd.ExecuteNonQuery();
             count++;
             if (count % 1000 == 0)
@@ -1021,7 +1087,76 @@ public class AdvisorRepository
             MailingAddress = r.FieldCount > 23 && !r.IsDBNull(23) ? r.GetString(23) : null,
             RegistrationStatus = r.FieldCount > 24 && !r.IsDBNull(24) ? r.GetString(24) : null,
             AumDescription = r.FieldCount > 25 && !r.IsDBNull(25) ? r.GetString(25) : null,
-            StateOfOrganization = r.FieldCount > 26 && !r.IsDBNull(26) ? r.GetString(26) : null
+            StateOfOrganization = r.FieldCount > 26 && !r.IsDBNull(26) ? r.GetString(26) : null,
+            Country = r.FieldCount > 27 && !r.IsDBNull(27) ? r.GetString(27) : null,
+            NumberOfEmployees = r.FieldCount > 28 && !r.IsDBNull(28) ? r.GetInt32(28) : null,
+            LatestFilingDate = r.FieldCount > 29 && !r.IsDBNull(29) ? r.GetString(29) : null,
+            RegulatoryAum = r.FieldCount > 30 && !r.IsDBNull(30) ? (decimal?)r.GetDouble(30) : null,
+            RegulatoryAumNonDiscretionary = r.FieldCount > 31 && !r.IsDBNull(31) ? (decimal?)r.GetDouble(31) : null,
+            NumClients = r.FieldCount > 32 && !r.IsDBNull(32) ? r.GetInt32(32) : null,
+            BrokerProtocolMember = r.FieldCount > 33 && !r.IsDBNull(33) && r.GetInt32(33) == 1,
+            BrokerProtocolUpdatedAt = r.FieldCount > 34 && !r.IsDBNull(34) ? DateTime.Parse(r.GetString(34)) : null
         };
+    }
+
+    /// <summary>
+    /// Marks firms as Broker Protocol members by matching against a list of member names.
+    /// Clears old memberships first, then sets new ones using fuzzy name matching.
+    /// </summary>
+    public int UpdateBrokerProtocolStatus(List<string> memberNames, DateTime fetchedAt)
+    {
+        var conn = _context.GetConnection();
+        int updated = 0;
+
+        // Clear all existing memberships
+        using (var clearCmd = conn.CreateCommand())
+        {
+            clearCmd.CommandText = "UPDATE Firms SET BrokerProtocolMember = 0";
+            clearCmd.ExecuteNonQuery();
+        }
+
+        if (memberNames.Count == 0) return 0;
+
+        // Load all firm names for fuzzy matching
+        var firms = new List<(int Id, string Name)>();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT Id, Name FROM Firms WHERE Name IS NOT NULL";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                firms.Add((r.GetInt32(0), r.GetString(1)));
+        }
+
+        // Normalize a name for matching: lowercase, strip legal suffixes, remove punctuation
+        static string Normalize(string s) => System.Text.RegularExpressions.Regex.Replace(
+            s.ToLowerInvariant()
+             .Replace(" llc", "").Replace(" inc", "").Replace(" corp", "")
+             .Replace(" lp", "").Replace(" ltd", "").Replace(" co.", "")
+             .Replace(",", "").Replace(".", "").Replace("&", "and"),
+            @"\s+", " ").Trim();
+
+        var memberNormalized = memberNames.Select(Normalize).ToHashSet();
+
+        var toUpdate = new List<int>();
+        foreach (var (id, name) in firms)
+        {
+            var norm = Normalize(name);
+            if (memberNormalized.Contains(norm) ||
+                memberNormalized.Any(m => norm.Contains(m) || m.Contains(norm)))
+            {
+                toUpdate.Add(id);
+            }
+        }
+
+        if (toUpdate.Count > 0)
+        {
+            using var updateCmd = conn.CreateCommand();
+            var idList = string.Join(",", toUpdate);
+            updateCmd.CommandText = $"UPDATE Firms SET BrokerProtocolMember = 1, BrokerProtocolUpdatedAt = @ts WHERE Id IN ({idList})";
+            updateCmd.Parameters.AddWithValue("@ts", fetchedAt.ToString("O"));
+            updated = updateCmd.ExecuteNonQuery();
+        }
+
+        return updated;
     }
 }

@@ -9,6 +9,7 @@ public class Advisor
     public string LastName { get; set; } = string.Empty;
     public string FullName => $"{FirstName} {LastName}".Trim();
     public string? MiddleName { get; set; }
+    public string? OtherNames { get; set; }  // comma-joined from basicInformation.otherNames[]
     public string? Title { get; set; }
     public string? Email { get; set; }
     public string? Phone { get; set; }
@@ -26,6 +27,12 @@ public class Advisor
     public bool HasDisclosures { get; set; }
     public int DisclosureCount { get; set; }
     public string? Source { get; set; }
+    // "Investment Advisor Representative", "Registered Representative", or combined
+    public string? RecordType { get; set; }
+    public string? Suffix { get; set; }
+    public string? IapdLink { get; set; }
+    public string? RegAuthorities { get; set; }  // comma-joined state codes from CrntRgstn.regAuth
+    public string? DisclosureFlags { get; set; } // comma-joined Y disclosure types e.g. "Criminal,Judgment"
     public bool IsExcluded { get; set; }
     public string? ExclusionReason { get; set; }
     public bool IsImportedToCrm { get; set; }

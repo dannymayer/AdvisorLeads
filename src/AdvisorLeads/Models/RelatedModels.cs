@@ -10,6 +10,7 @@ public class EmploymentHistory
     public DateTime? EndDate { get; set; }
     public bool IsCurrent => EndDate == null;
     public string? Position { get; set; }
+    public string? Street { get; set; }  // branch office street address
 }
 
 public class Disclosure

@@ -17,9 +17,11 @@ public class MainForm : Form
     private SecIapdService _secStub = null!;
     private SecCompilationService _sec = null!;
     private SecMonthlyFirmService _secMonthly = null!;
+    private BrokerProtocolService _brokerProtocolService = null!;
     private DataSyncService _sync = null!;
     private BackgroundDataService _bgData = null!;
     private WealthboxService? _wealthbox;
+    private SecIapdEnrichmentService _iapd = null!;
     private ListRepository _listRepo = null!;
     private string _wealthboxToken = string.Empty;
 
@@ -79,6 +81,10 @@ public class MainForm : Form
         _bgData.DataUpdated += OnBackgroundDataUpdated;
         _secMonthly = new SecMonthlyFirmService();
         _bgData.SetSecMonthlyService(_secMonthly);
+        _brokerProtocolService = new BrokerProtocolService();
+        _bgData.SetBrokerProtocolService(_brokerProtocolService);
+        _iapd = new SecIapdEnrichmentService(_repo);
+        _bgData.SetIapdService(_iapd);
         _listRepo = new ListRepository(_db);
 
         // Load saved Wealthbox token
@@ -565,6 +571,21 @@ public class MainForm : Form
 
         _bgData.StartBackgroundRefresh(intervalMinutes: 60);
 
+        // Run SEC IAPD enrichment in the background for advisors missing employment/qualifications.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var progress = new Progress<string>(_ => { }); // silent background
+                await _bgData.RunIapdEnrichmentAsync(progress, maxToProcess: 200);
+                if (InvokeRequired)
+                    BeginInvoke(() => LoadAdvisors());
+                else
+                    LoadAdvisors();
+            }
+            catch { /* non-critical */ }
+        });
+
         // Check monthly SEC firm data in the background without blocking UI startup.
         _ = Task.Run(async () =>
         {
@@ -582,6 +603,15 @@ public class MainForm : Form
             {
                 BeginInvoke(() => SetStatus($"SEC firm update failed: {ex.Message}"));
             }
+        });
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _bgData.CheckAndUpdateBrokerProtocolAsync(LoadSetting, SaveSetting);
+            }
+            catch { /* non-critical */ }
         });
     }
 

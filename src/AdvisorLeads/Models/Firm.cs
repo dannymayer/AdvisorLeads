@@ -30,6 +30,16 @@ public class Firm
     public string? Country { get; set; }             // Main Office Country
     public int? NumberOfEmployees { get; set; }      // 5A total employees
     public string? LatestFilingDate { get; set; }    // Latest ADV Filing Date
+    /// <summary>Discretionary RAUM in USD (parsed from CSV column 5F(2)(a)).</summary>
+    public decimal? RegulatoryAum { get; set; }
+    /// <summary>Non-discretionary RAUM in USD (parsed from CSV column 5F(2)(b)).</summary>
+    public decimal? RegulatoryAumNonDiscretionary { get; set; }
+    /// <summary>Approximate number of clients (parsed from CSV column 5D or 5E.1).</summary>
+    public int? NumClients { get; set; }
+    /// <summary>True if this firm is a member of the Broker Protocol.</summary>
+    public bool BrokerProtocolMember { get; set; }
+    /// <summary>When the Broker Protocol membership was last confirmed/updated.</summary>
+    public DateTime? BrokerProtocolUpdatedAt { get; set; }
     public bool IsExcluded { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

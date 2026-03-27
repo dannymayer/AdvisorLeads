@@ -174,8 +174,31 @@ public class SecMonthlyFirmService
 
         // AUM: 5F(2)(a) = Discretionary Regulatory AUM
         var aumRaw = Get("5F(2)(a)");
-        // Strip whitespace and trailing ".00" noise
-        var aumClean = aumRaw.Replace(",", "").Trim();
+        decimal? regulatoryAum = null;
+        if (!string.IsNullOrWhiteSpace(aumRaw) &&
+            decimal.TryParse(aumRaw.Replace(",", ""), System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsedAum))
+            regulatoryAum = parsedAum;
+
+        decimal? regulatoryAumNd = null;
+        var aumNdRaw = Get("5F(2)(b)");
+        if (!string.IsNullOrWhiteSpace(aumNdRaw) &&
+            decimal.TryParse(aumNdRaw.Replace(",", ""), System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsedAumNd))
+            regulatoryAumNd = parsedAumNd;
+
+        int? numClients = null;
+        foreach (var clientCol in new[] { "5D", "5D(a)", "5D1" })
+        {
+            var cv = Get(clientCol);
+            if (!string.IsNullOrWhiteSpace(cv) && int.TryParse(cv.Replace(",", ""), out var nc))
+            {
+                numClients = nc;
+                break;
+            }
+        }
+
+        var aumDescription = regulatoryAum.HasValue ? FormatAum(regulatoryAum.Value) : NullIfEmpty(aumRaw.Replace(",", "").Trim());
 
         // Number of employees (5A = total), investment adviser reps (5B(1))
         int? numEmployees = null;
@@ -211,7 +234,10 @@ public class SecMonthlyFirmService
             LatestFilingDate   = NullIfEmpty(Get("Latest ADV Filing Date")),
             NumberOfEmployees  = numEmployees,
             NumberOfAdvisors   = numAdvisors,
-            AumDescription     = NullIfEmpty(aumClean),
+            AumDescription     = aumDescription,
+            RegulatoryAum      = regulatoryAum,
+            RegulatoryAumNonDiscretionary = regulatoryAumNd,
+            NumClients         = numClients,
             RecordType         = "Investment Advisor",
             IsRegisteredWithSec = true,
             Source             = "SEC",
@@ -220,6 +246,14 @@ public class SecMonthlyFirmService
 
     private static string? NullIfEmpty(string? s)
         => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    private static string FormatAum(decimal aum)
+    {
+        if (aum >= 1_000_000_000) return $"${aum / 1_000_000_000:F1}B";
+        if (aum >= 1_000_000)     return $"${aum / 1_000_000:F1}M";
+        if (aum >= 1_000)         return $"${aum / 1_000:F0}K";
+        return $"${aum:F0}";
+    }
 
     // RFC 4180-compliant CSV parser
     private static List<string> ParseCsvLine(string line)

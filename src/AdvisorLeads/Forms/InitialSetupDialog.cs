@@ -1,25 +1,37 @@
 namespace AdvisorLeads.Forms;
 
 /// <summary>
-/// Modal dialog shown on first run while the database is being populated with
-/// advisor data from FINRA BrokerCheck. Shows progress messages and prevents
-/// interaction with the main form until population completes.
+/// Modal dialog shown on first run (or after "Clear All Data") while the database is
+/// populated from SEC/FINRA. Shows a scrollable log of all progress messages so the
+/// user can see exactly what is happening and spot any errors.
+///
+/// The caller must supply the work via <see cref="WorkFactory"/> before calling ShowDialog.
+/// The work is started from the dialog's Shown event so the window handle is guaranteed
+/// to exist, which prevents the race condition where SetComplete fires before the form
+/// is visible.
 /// </summary>
 public class InitialSetupDialog : Form
 {
     private readonly Label _lblTitle;
-    private readonly Label _lblStatus;
+    private readonly ListBox _logBox;
     private readonly ProgressBar _progressBar;
-    private readonly Button _btnCancel;
+    private readonly Button _btnAction;
     private CancellationTokenSource? _cts;
+    private bool _isDone;
+
+    /// <summary>
+    /// Set this before calling ShowDialog. The factory receives the progress reporter and
+    /// cancellation token, and must return the number of records saved.
+    /// </summary>
+    public Func<IProgress<string>, CancellationToken, Task<int>>? WorkFactory { get; set; }
 
     public bool WasCancelled { get; private set; }
 
     public InitialSetupDialog()
     {
         Text = "AdvisorLeads – Initial Setup";
-        Width = 480;
-        Height = 220;
+        Width = 560;
+        Height = 420;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -27,101 +39,154 @@ public class InitialSetupDialog : Form
         ControlBox = false;
         Font = new Font("Segoe UI", 9);
 
-        var panel = new TableLayoutPanel
+        var outer = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 4,
-            Padding = new Padding(24, 20, 24, 16)
+            Padding = new Padding(20, 16, 20, 14)
         };
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // title
+        outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // log
+        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 28)); // progress bar
+        outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // button
 
         _lblTitle = new Label
         {
-            Text = "Setting up AdvisorLeads for first use...",
+            Text = "Setting up AdvisorLeads...",
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
             ForeColor = Color.FromArgb(40, 60, 130),
+            Dock = DockStyle.Fill,
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
         };
-        panel.Controls.Add(_lblTitle, 0, 0);
+        outer.Controls.Add(_lblTitle, 0, 0);
 
-        _lblStatus = new Label
+        _logBox = new ListBox
         {
-            Text = "Fetching advisor data from FINRA BrokerCheck.\nThis only needs to happen once.",
-            AutoSize = true,
-            ForeColor = Color.DimGray,
-            Padding = new Padding(0, 0, 0, 12)
+            Dock = DockStyle.Fill,
+            Font = new Font("Consolas", 8.5f),
+            BackColor = Color.FromArgb(248, 248, 252),
+            BorderStyle = BorderStyle.FixedSingle,
+            HorizontalScrollbar = true,
+            ScrollAlwaysVisible = false
         };
-        panel.Controls.Add(_lblStatus, 0, 1);
+        outer.Controls.Add(_logBox, 0, 1);
 
         _progressBar = new ProgressBar
         {
             Dock = DockStyle.Fill,
             Style = ProgressBarStyle.Marquee,
-            MarqueeAnimationSpeed = 30,
-            Height = 24
+            MarqueeAnimationSpeed = 30
         };
-        panel.Controls.Add(_progressBar, 0, 2);
+        outer.Controls.Add(_progressBar, 0, 2);
 
-        _btnCancel = new Button
+        _btnAction = new Button
         {
             Text = "Skip (use empty database)",
-            AutoSize = true,
+            Width = 200,
             Anchor = AnchorStyles.Right,
             Padding = new Padding(8, 2, 8, 2)
         };
-        _btnCancel.Click += (_, _) =>
+        _btnAction.Click += OnActionClick;
+        outer.Controls.Add(_btnAction, 0, 3);
+
+        Controls.Add(outer);
+        this.Shown += OnShown;
+    }
+
+    private void OnActionClick(object? sender, EventArgs e)
+    {
+        if (_isDone)
+        {
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+        else
         {
             WasCancelled = true;
             _cts?.Cancel();
             DialogResult = DialogResult.Cancel;
             Close();
-        };
-        panel.Controls.Add(_btnCancel, 0, 3);
-
-        Controls.Add(panel);
-    }
-
-    /// <summary>
-    /// Updates the status text from the background data fetch.
-    /// Thread-safe: marshals to UI thread automatically.
-    /// </summary>
-    public void SetProgress(string message)
-    {
-        if (InvokeRequired)
-        {
-            BeginInvoke(() => SetProgress(message));
-            return;
         }
-        _lblStatus.Text = message;
+    }
+
+    private void OnShown(object? sender, EventArgs e)
+    {
+        if (WorkFactory == null) return;
+
+        _cts = new CancellationTokenSource();
+        var progress = new Progress<string>(msg => AppendLog(msg));
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var count = await WorkFactory(progress, _cts.Token);
+                SetComplete(count);
+            }
+            catch (OperationCanceledException)
+            {
+                // user skipped
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"ERROR: {ex.Message}");
+                SetComplete(-1);
+            }
+        });
     }
 
     /// <summary>
-    /// Called when population is complete. Closes the dialog with OK result.
+    /// Appends a message to the log. Thread-safe.
     /// </summary>
+    public void AppendLog(string message)
+    {
+        if (!IsHandleCreated) return;
+        if (InvokeRequired) { BeginInvoke(() => AppendLog(message)); return; }
+        _logBox.Items.Add(message);
+        _logBox.TopIndex = _logBox.Items.Count - 1;
+
+        // Also write to startup log for diagnostic purposes
+        try
+        {
+            var logDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "AdvisorLeads");
+            Directory.CreateDirectory(logDir);
+            File.AppendAllText(Path.Combine(logDir, "startup.log"),
+                $"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+        }
+        catch { }
+    }
+
+    /// <summary>Called when population is complete. Thread-safe.</summary>
     public void SetComplete(int count)
     {
-        if (InvokeRequired)
-        {
-            BeginInvoke(() => SetComplete(count));
-            return;
-        }
+        if (!IsHandleCreated) return;
+        if (InvokeRequired) { BeginInvoke(() => SetComplete(count)); return; }
+
+        _isDone = true;
         _progressBar.Style = ProgressBarStyle.Continuous;
         _progressBar.Value = 100;
-        _lblTitle.Text = "Setup Complete";
-        _lblStatus.Text = $"✓ {count} advisors loaded. The application is ready.";
-        _btnCancel.Text = "Continue";
-        _btnCancel.Click -= null!;
-        _btnCancel.Click += (_, _) =>
+
+        if (count < 0)
         {
-            DialogResult = DialogResult.OK;
-            Close();
-        };
+            _lblTitle.Text = "Setup encountered errors";
+            _lblTitle.ForeColor = Color.DarkRed;
+            AppendLog("⚠ Setup finished with errors. See log above. You can fetch data later via Data → Fetch New Data.");
+        }
+        else
+        {
+            _lblTitle.Text = "Setup Complete";
+            AppendLog($"✓ {count} advisor records loaded. FINRA broker-dealer data will sync in the background.");
+        }
+
+        _btnAction.Text = "Continue";
     }
+
+    /// <summary>Kept for backwards compatibility – delegates to AppendLog.</summary>
+    public void SetProgress(string message) => AppendLog(message);
 
     public void SetCancellationToken(CancellationTokenSource cts) => _cts = cts;
 }

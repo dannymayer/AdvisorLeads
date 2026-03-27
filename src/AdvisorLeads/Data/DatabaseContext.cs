@@ -199,6 +199,11 @@ public class DatabaseContext : IDisposable
         TryAddColumn(conn, "Firms", "Country", "TEXT");
         TryAddColumn(conn, "Firms", "NumberOfEmployees", "INTEGER");
         TryAddColumn(conn, "Firms", "LatestFilingDate", "TEXT");
+        TryAddColumn(conn, "Firms", "RegulatoryAum",        "REAL");
+        TryAddColumn(conn, "Firms", "RegulatoryAumNonDiscretionary", "REAL");
+        TryAddColumn(conn, "Firms", "NumClients",            "INTEGER");
+        TryAddColumn(conn, "Firms", "BrokerProtocolMember",  "INTEGER DEFAULT 0");
+        TryAddColumn(conn, "Firms", "BrokerProtocolUpdatedAt", "TEXT");
 
         // Create the RecordType index now that the column is guaranteed to exist.
         TryCreateIndex(conn, "idx_advisors_recordtype", "CREATE INDEX IF NOT EXISTS idx_advisors_recordtype ON Advisors(RecordType)");
