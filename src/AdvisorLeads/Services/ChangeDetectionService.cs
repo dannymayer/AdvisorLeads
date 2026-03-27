@@ -28,7 +28,6 @@ public class ChangeDetectionService
     public int DetectChanges(List<Firm> incomingFirms, IProgress<string>? progress = null)
     {
         using var ctx = CreateContext();
-        int eventCount = 0;
         var events = new List<FirmFilingEvent>();
         var now = DateTime.UtcNow;
 
@@ -70,7 +69,7 @@ public class ChangeDetectionService
                         FirmCrd = incoming.CrdNumber,
                         EventDate = now,
                         EventType = "AUM_SURGE",
-                        Description = $"AUM surged {pctChange:F1}% from {FormatAum(oldAum)} to {FormatAum(newAum)}",
+                        Description = $"AUM surged {pctChange:F1}% from {FormatHelpers.FormatAum(oldAum)} to {FormatHelpers.FormatAum(newAum)}",
                         OldValue = oldAum.ToString("F0"),
                         NewValue = newAum.ToString("F0"),
                         PercentChange = pctChange,
@@ -85,7 +84,7 @@ public class ChangeDetectionService
                         FirmCrd = incoming.CrdNumber,
                         EventDate = now,
                         EventType = "AUM_JUMP",
-                        Description = $"AUM grew {pctChange:F1}% from {FormatAum(oldAum)} to {FormatAum(newAum)}",
+                        Description = $"AUM grew {pctChange:F1}% from {FormatHelpers.FormatAum(oldAum)} to {FormatHelpers.FormatAum(newAum)}",
                         OldValue = oldAum.ToString("F0"),
                         NewValue = newAum.ToString("F0"),
                         PercentChange = pctChange,
@@ -100,7 +99,7 @@ public class ChangeDetectionService
                         FirmCrd = incoming.CrdNumber,
                         EventDate = now,
                         EventType = "AUM_DROP",
-                        Description = $"AUM declined {Math.Abs(pctChange):F1}% from {FormatAum(oldAum)} to {FormatAum(newAum)}",
+                        Description = $"AUM declined {Math.Abs(pctChange):F1}% from {FormatHelpers.FormatAum(oldAum)} to {FormatHelpers.FormatAum(newAum)}",
                         OldValue = oldAum.ToString("F0"),
                         NewValue = newAum.ToString("F0"),
                         PercentChange = pctChange,
@@ -209,13 +208,12 @@ public class ChangeDetectionService
         // Batch insert events
         if (events.Count > 0)
         {
-            ctx.Set<FirmFilingEvent>().AddRange(events);
+            ctx.FirmFilingEvents.AddRange(events);
             ctx.SaveChanges();
-            eventCount = events.Count;
         }
 
-        progress?.Report($"Change Detection: Generated {eventCount} events from {incomingFirms.Count} firms.");
-        return eventCount;
+        progress?.Report($"Change Detection: Generated {events.Count} events from {incomingFirms.Count} firms.");
+        return events.Count;
     }
 
     /// <summary>
@@ -224,7 +222,7 @@ public class ChangeDetectionService
     public List<FirmFilingEvent> GetEventsForFirm(string firmCrd)
     {
         using var ctx = CreateContext();
-        return ctx.Set<FirmFilingEvent>()
+        return ctx.FirmFilingEvents
             .AsNoTracking()
             .Where(e => e.FirmCrd == firmCrd)
             .OrderByDescending(e => e.EventDate)
@@ -241,7 +239,7 @@ public class ChangeDetectionService
         bool unReviewedOnly = false)
     {
         using var ctx = CreateContext();
-        IQueryable<FirmFilingEvent> query = ctx.Set<FirmFilingEvent>().AsNoTracking();
+        IQueryable<FirmFilingEvent> query = ctx.FirmFilingEvents.AsNoTracking();
 
         if (!string.IsNullOrEmpty(severity))
             query = query.Where(e => e.Severity == severity);
@@ -263,7 +261,7 @@ public class ChangeDetectionService
     {
         using var ctx = CreateContext();
         var since = DateTime.UtcNow.AddDays(-daysBack);
-        return ctx.Set<FirmFilingEvent>()
+        return ctx.FirmFilingEvents
             .AsNoTracking()
             .Where(e => e.EventDate >= since)
             .GroupBy(e => e.EventType)
@@ -277,16 +275,8 @@ public class ChangeDetectionService
     {
         using var ctx = CreateContext();
         var idList = eventIds.ToList();
-        ctx.Set<FirmFilingEvent>()
+        ctx.FirmFilingEvents
             .Where(e => idList.Contains(e.Id))
             .ExecuteUpdate(s => s.SetProperty(e => e.IsReviewed, true));
-    }
-
-    private static string FormatAum(decimal aum)
-    {
-        if (aum >= 1_000_000_000) return $"${aum / 1_000_000_000:F1}B";
-        if (aum >= 1_000_000) return $"${aum / 1_000_000:F1}M";
-        if (aum >= 1_000) return $"${aum / 1_000:F0}K";
-        return $"${aum:F0}";
     }
 }

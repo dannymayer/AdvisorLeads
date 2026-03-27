@@ -90,7 +90,7 @@ public class MaTargetScoringService
             else if (totalAum >= 10_000_000)
             { totalPoints += 3; score.SizePoints = 3; }
 
-            score.SizeDetail = FormatAum(totalAum);
+            score.SizeDetail = FormatHelpers.FormatAum(totalAum);
         }
 
         // ── 3. Broker Protocol Membership (max 10 points) ──
@@ -269,14 +269,6 @@ public class MaTargetScoringService
             AverageScore = scores.Count > 0 ? scores.Average(s => s.TotalScore) : 0,
             MedianScore = scores.Count > 0 ? scores.OrderBy(s => s.TotalScore).ElementAt(scores.Count / 2).TotalScore : 0,
         };
-    }
-
-    private static string FormatAum(decimal aum)
-    {
-        if (aum >= 1_000_000_000) return $"${aum / 1_000_000_000:F1}B";
-        if (aum >= 1_000_000) return $"${aum / 1_000_000:F1}M";
-        if (aum >= 1_000) return $"${aum / 1_000:F0}K";
-        return $"${aum:F0}";
     }
 }
 

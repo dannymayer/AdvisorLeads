@@ -245,19 +245,21 @@ public class DatabaseContext : DbContext
     /// </summary>
     public void ClearAllData()
     {
+        // Child/dependent tables first
         Qualifications.ExecuteDelete();
         Disclosures.ExecuteDelete();
         EmploymentHistory.ExecuteDelete();
         AdvisorListMembers.ExecuteDelete();
         AdvisorLists.ExecuteDelete();
-        Advisors.ExecuteDelete();
         EdgarSearchResults.ExecuteDelete();
         FirmFilingEvents.ExecuteDelete();
         FirmFilings.ExecuteDelete();
         FirmAumHistory.ExecuteDelete();
-        Firms.ExecuteDelete();
         FirmOwnership.ExecuteDelete();
         FormAdvFilings.ExecuteDelete();
+        // Parent tables last
+        Advisors.ExecuteDelete();
+        Firms.ExecuteDelete();
         Database.ExecuteSqlRaw(
             "DELETE FROM sqlite_sequence WHERE name IN ('EdgarSearchResults','FirmFilings','FirmFilingEvents','AdvisorListMembers','AdvisorLists','Qualifications','Disclosures','EmploymentHistory','Advisors','Firms','FirmOwnership','FormAdvFilings','FirmAumHistory')");
     }

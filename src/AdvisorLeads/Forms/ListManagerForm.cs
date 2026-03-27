@@ -263,7 +263,8 @@ public class ListManagerForm : Form
         if (_lstLists.SelectedIndex < 0 || _lstLists.SelectedIndex >= _allLists.Count) return;
         var list = _allLists[_lstLists.SelectedIndex];
         var selectedIds = _lvMembers.SelectedItems.Cast<ListViewItem>()
-            .Select(i => (int)i.Tag).ToList();
+            .Where(i => i.Tag is int)
+            .Select(i => (int)i.Tag!).ToList();
         if (selectedIds.Count == 0) return;
 
         var confirmed = MessageBox.Show(
@@ -291,7 +292,8 @@ public class ListManagerForm : Form
     private void ExportSelectedToCsv()
     {
         var selected = _lvMembers.SelectedItems.Cast<ListViewItem>()
-            .Select(i => _currentMembers.FirstOrDefault(a => a.Id == (int)i.Tag))
+            .Where(i => i.Tag is int)
+            .Select(i => _currentMembers.FirstOrDefault(a => a.Id == (int)i.Tag!))
             .Where(a => a != null).Cast<Advisor>().ToList();
         if (!selected.Any()) { ExportListToCsv(); return; }
         ExportToCsv(selected);
@@ -371,7 +373,8 @@ public class ListManagerForm : Form
     private async Task ImportSelectedToCrm()
     {
         var selected = _lvMembers.SelectedItems.Cast<ListViewItem>()
-            .Select(i => _currentMembers.FirstOrDefault(a => a.Id == (int)i.Tag))
+            .Where(i => i.Tag is int)
+            .Select(i => _currentMembers.FirstOrDefault(a => a.Id == (int)i.Tag!))
             .Where(a => a != null).Cast<Advisor>().ToList();
         if (!selected.Any()) { await ImportListToCrm(); return; }
         await ImportAdvisorsToCrm(selected);

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using AdvisorLeads.Data;
 using AdvisorLeads.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace AdvisorLeads.Services;
 
@@ -141,8 +142,9 @@ public class FormAdvHistoricalService
     /// </summary>
     public FormAdvFiling? GetLatestFiling(string firmCrd)
     {
-        using var db = new DatabaseContext(_dbPath);
-        return db.FormAdvFilings
+        using var ctx = new DatabaseContext(_dbPath);
+        return ctx.FormAdvFilings
+            .AsNoTracking()
             .Where(f => f.FirmCrd == firmCrd)
             .OrderByDescending(f => f.FilingDate)
             .FirstOrDefault();
@@ -153,8 +155,9 @@ public class FormAdvHistoricalService
     /// </summary>
     public List<FormAdvFiling> GetFilingHistory(string firmCrd)
     {
-        using var db = new DatabaseContext(_dbPath);
-        return db.FormAdvFilings
+        using var ctx = new DatabaseContext(_dbPath);
+        return ctx.FormAdvFilings
+            .AsNoTracking()
             .Where(f => f.FirmCrd == firmCrd)
             .OrderByDescending(f => f.FilingDate)
             .ToList();
@@ -165,8 +168,9 @@ public class FormAdvHistoricalService
     /// </summary>
     public List<FirmOwnership> GetFirmOwnership(string firmCrd)
     {
-        using var db = new DatabaseContext(_dbPath);
-        return db.FirmOwnership
+        using var ctx = new DatabaseContext(_dbPath);
+        return ctx.FirmOwnership
+            .AsNoTracking()
             .Where(o => o.FirmCrd == firmCrd)
             .OrderByDescending(o => o.FilingDate)
             .ThenBy(o => o.OwnerName)
@@ -178,8 +182,9 @@ public class FormAdvHistoricalService
     /// </summary>
     public List<FirmOwnership> GetFirmOwnershipAtDate(string firmCrd, DateTime filingDate)
     {
-        using var db = new DatabaseContext(_dbPath);
-        return db.FirmOwnership
+        using var ctx = new DatabaseContext(_dbPath);
+        return ctx.FirmOwnership
+            .AsNoTracking()
             .Where(o => o.FirmCrd == firmCrd && o.FilingDate == filingDate)
             .OrderBy(o => o.OwnerName)
             .ToList();
@@ -403,14 +408,14 @@ public class FormAdvHistoricalService
         if (filings.Count == 0) return 0;
 
         int saved = 0;
-        using var db = new DatabaseContext(_dbPath);
+        using var ctx = new DatabaseContext(_dbPath);
 
         for (int i = 0; i < filings.Count; i += BatchSize)
         {
             ct.ThrowIfCancellationRequested();
             var batch = filings.GetRange(i, Math.Min(BatchSize, filings.Count - i));
-            db.FormAdvFilings.AddRange(batch);
-            await db.SaveChangesAsync(ct);
+            ctx.FormAdvFilings.AddRange(batch);
+            await ctx.SaveChangesAsync(ct);
             saved += batch.Count;
             progress?.Report($"Form ADV History: Saved {saved:N0} / {filings.Count:N0} filings...");
         }
@@ -426,14 +431,14 @@ public class FormAdvHistoricalService
         if (owners.Count == 0) return 0;
 
         int saved = 0;
-        using var db = new DatabaseContext(_dbPath);
+        using var ctx = new DatabaseContext(_dbPath);
 
         for (int i = 0; i < owners.Count; i += BatchSize)
         {
             ct.ThrowIfCancellationRequested();
             var batch = owners.GetRange(i, Math.Min(BatchSize, owners.Count - i));
-            db.FirmOwnership.AddRange(batch);
-            await db.SaveChangesAsync(ct);
+            ctx.FirmOwnership.AddRange(batch);
+            await ctx.SaveChangesAsync(ct);
             saved += batch.Count;
             progress?.Report($"Form ADV History: Saved {saved:N0} / {owners.Count:N0} ownership records...");
         }

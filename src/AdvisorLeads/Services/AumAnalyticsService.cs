@@ -31,7 +31,8 @@ public class AumAnalyticsService
         var sourceTag = $"SEC_MONTHLY_{monthStart:yyyyMM}";
 
         // Get existing snapshots for this month to avoid duplicates
-        var existingCrds = ctx.Set<FirmAumHistory>()
+        var existingCrds = ctx.FirmAumHistory
+            .AsNoTracking()
             .Where(h => h.SnapshotDate == monthStart)
             .Select(h => h.FirmCrd)
             .ToHashSet();
@@ -65,7 +66,7 @@ public class AumAnalyticsService
             // Batch insert in chunks of 5000
             foreach (var batch in newSnapshots.Chunk(5000))
             {
-                ctx.Set<FirmAumHistory>().AddRange(batch);
+                ctx.FirmAumHistory.AddRange(batch);
                 ctx.SaveChanges();
             }
         }
@@ -79,7 +80,7 @@ public class AumAnalyticsService
     public List<FirmAumHistory> GetAumHistory(string firmCrd)
     {
         using var ctx = CreateContext();
-        return ctx.Set<FirmAumHistory>()
+        return ctx.FirmAumHistory
             .AsNoTracking()
             .Where(h => h.FirmCrd == firmCrd)
             .OrderBy(h => h.SnapshotDate)
@@ -207,15 +208,16 @@ public class AumAnalyticsService
         using var ctx = CreateContext();
 
         // Get the latest snapshot date
-        var latestDate = ctx.Set<FirmAumHistory>()
+        var latestDate = ctx.FirmAumHistory
+            .AsNoTracking()
             .OrderByDescending(h => h.SnapshotDate)
             .Select(h => h.SnapshotDate)
             .FirstOrDefault();
 
-        if (latestDate == default) return new List<FirmGrowthMetrics>();
+        if (latestDate == default) return [];
 
         // Get firms with recent snapshots
-        var firmCrds = ctx.Set<FirmAumHistory>()
+        var firmCrds = ctx.FirmAumHistory
             .Where(h => h.SnapshotDate == latestDate && h.TotalAum > 0)
             .Select(h => h.FirmCrd)
             .Distinct()
@@ -231,7 +233,7 @@ public class AumAnalyticsService
             firmCrds = firmCrds.Where(c => stateFirms.Contains(c)).ToList();
         }
 
-        var metrics = new List<FirmGrowthMetrics>();
+        var metrics = new List<FirmGrowthMetrics>(firmCrds.Count);
         foreach (var crd in firmCrds)
         {
             var m = CalculateGrowthMetrics(crd);

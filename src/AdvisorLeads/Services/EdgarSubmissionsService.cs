@@ -107,9 +107,10 @@ public class EdgarSubmissionsService
 
         var newFilings = new List<FirmFiling>();
 
-        using (var db = new DatabaseContext(_dbPath))
+        using (var ctx = new DatabaseContext(_dbPath))
         {
-            var existingAccessions = db.FirmFilings
+            var existingAccessions = ctx.FirmFilings
+                .AsNoTracking()
                 .Where(f => f.FirmCrd == firmCrd)
                 .Select(f => f.AccessionNumber)
                 .ToHashSet();
@@ -157,8 +158,8 @@ public class EdgarSubmissionsService
 
             if (newFilings.Count > 0)
             {
-                db.FirmFilings.AddRange(newFilings);
-                await db.SaveChangesAsync(ct);
+                ctx.FirmFilings.AddRange(newFilings);
+                await ctx.SaveChangesAsync(ct);
             }
         }
 
@@ -176,11 +177,12 @@ public class EdgarSubmissionsService
         CancellationToken ct = default)
     {
         List<Firm> firms;
-        using (var db = new DatabaseContext(_dbPath))
+        using (var ctx = new DatabaseContext(_dbPath))
         {
             // Firms with SEC numbers that have no filings yet
-            var firmsWithFilings = db.FirmFilings.Select(f => f.FirmCrd).Distinct();
-            firms = await db.Firms
+            var firmsWithFilings = ctx.FirmFilings.Select(f => f.FirmCrd).Distinct();
+            firms = await ctx.Firms
+                .AsNoTracking()
                 .Where(f => f.SECNumber != null && f.SECNumber != "")
                 .Where(f => !firmsWithFilings.Contains(f.CrdNumber))
                 .OrderBy(f => f.Name)
@@ -215,8 +217,9 @@ public class EdgarSubmissionsService
     /// </summary>
     public List<FirmFiling> GetFilings(string firmCrd)
     {
-        using var db = new DatabaseContext(_dbPath);
-        return db.FirmFilings
+        using var ctx = new DatabaseContext(_dbPath);
+        return ctx.FirmFilings
+            .AsNoTracking()
             .Where(f => f.FirmCrd == firmCrd)
             .OrderByDescending(f => f.FilingDate)
             .ToList();
@@ -227,8 +230,9 @@ public class EdgarSubmissionsService
     /// </summary>
     public List<FirmFiling> GetAdvFilings(string firmCrd)
     {
-        using var db = new DatabaseContext(_dbPath);
-        return db.FirmFilings
+        using var ctx = new DatabaseContext(_dbPath);
+        return ctx.FirmFilings
+            .AsNoTracking()
             .Where(f => f.FirmCrd == firmCrd && AdvFormTypes.Contains(f.FormType))
             .OrderByDescending(f => f.FilingDate)
             .ToList();
@@ -241,8 +245,9 @@ public class EdgarSubmissionsService
     public (int total, int advCount, double amendmentsPerYear, DateTime? lastFiling) GetFilingMetrics(
         string firmCrd)
     {
-        using var db = new DatabaseContext(_dbPath);
-        var filings = db.FirmFilings
+        using var ctx = new DatabaseContext(_dbPath);
+        var filings = ctx.FirmFilings
+            .AsNoTracking()
             .Where(f => f.FirmCrd == firmCrd)
             .ToList();
 

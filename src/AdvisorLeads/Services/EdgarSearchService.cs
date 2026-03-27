@@ -1,5 +1,6 @@
 using AdvisorLeads.Data;
 using AdvisorLeads.Models;
+using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json.Linq;
 using System.Net.Http.Headers;
 using System.Web;
@@ -161,7 +162,7 @@ public class EdgarSearchService
         }
         catch (Exception)
         {
-            return new List<EdgarSearchResult>();
+            return [];
         }
     }
 
@@ -198,14 +199,14 @@ public class EdgarSearchService
                 {
                     if (string.IsNullOrEmpty(result.AccessionNumber)) continue;
 
-                    var exists = ctx.Set<EdgarSearchResult>()
+                    var exists = ctx.EdgarSearchResults
                         .Any(r => r.AccessionNumber == result.AccessionNumber
                             && r.SearchQuery == result.SearchQuery);
 
                     if (!exists)
                     {
                         result.CreatedAt = DateTime.UtcNow;
-                        ctx.Set<EdgarSearchResult>().Add(result);
+                        ctx.EdgarSearchResults.Add(result);
                         totalNew++;
                     }
                 }
@@ -250,7 +251,8 @@ public class EdgarSearchService
     public List<EdgarSearchResult> GetResultsForFirm(string firmCrd)
     {
         using var ctx = new DatabaseContext(_dbPath);
-        return ctx.Set<EdgarSearchResult>()
+        return ctx.EdgarSearchResults
+            .AsNoTracking()
             .Where(r => r.FirmCrd == firmCrd)
             .OrderByDescending(r => r.FilingDate)
             .ToList();
@@ -262,7 +264,8 @@ public class EdgarSearchService
     public Dictionary<string, List<EdgarSearchResult>> GetResultsByCategory(int maxPerCategory = 20)
     {
         using var ctx = new DatabaseContext(_dbPath);
-        var results = ctx.Set<EdgarSearchResult>()
+        var results = ctx.EdgarSearchResults
+            .AsNoTracking()
             .OrderByDescending(r => r.FilingDate)
             .ToList();
 
