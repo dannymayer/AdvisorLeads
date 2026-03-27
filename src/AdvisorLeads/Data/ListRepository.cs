@@ -1,4 +1,4 @@
-using Npgsql;
+using Microsoft.Data.Sqlite;
 using AdvisorLeads.Models;
 
 namespace AdvisorLeads.Data;
@@ -14,7 +14,7 @@ public class ListRepository
 
     public List<AdvisorList> GetAllLists()
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT l.Id, l.Name, l.Description, l.CreatedAt, l.UpdatedAt,
@@ -32,8 +32,8 @@ public class ListRepository
                 Id = r.GetInt32(0),
                 Name = r.GetString(1),
                 Description = r.IsDBNull(2) ? null : r.GetString(2),
-                CreatedAt = r.GetDateTime(3),
-                UpdatedAt = r.GetDateTime(4),
+                CreatedAt = DateTime.Parse(r.GetString(3)),
+                UpdatedAt = DateTime.Parse(r.GetString(4)),
                 MemberCount = r.GetInt32(5)
             });
         }
@@ -42,12 +42,12 @@ public class ListRepository
 
     public AdvisorList CreateList(string name, string? description = null)
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             INSERT INTO AdvisorLists (Name, Description)
-            VALUES (@name, @desc)
-            RETURNING Id;";
+            VALUES (@name, @desc);
+            SELECT last_insert_rowid();";
         cmd.Parameters.AddWithValue("@name", name);
         cmd.Parameters.AddWithValue("@desc", (object?)description ?? DBNull.Value);
         var id = Convert.ToInt32(cmd.ExecuteScalar());
@@ -56,9 +56,9 @@ public class ListRepository
 
     public void RenameList(int listId, string newName, string? description = null)
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE AdvisorLists SET Name=@name, Description=@desc, UpdatedAt=NOW() WHERE Id=@id";
+        cmd.CommandText = "UPDATE AdvisorLists SET Name=@name, Description=@desc, UpdatedAt=datetime('now') WHERE Id=@id";
         cmd.Parameters.AddWithValue("@name", newName);
         cmd.Parameters.AddWithValue("@desc", (object?)description ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@id", listId);
@@ -67,7 +67,7 @@ public class ListRepository
 
     public void DeleteList(int listId)
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM AdvisorLists WHERE Id=@id";
         cmd.Parameters.AddWithValue("@id", listId);
@@ -76,12 +76,11 @@ public class ListRepository
 
     public bool AddToList(int listId, int advisorId, string? notes = null)
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            INSERT INTO AdvisorListMembers (ListId, AdvisorId, Notes)
-            VALUES (@list, @adv, @notes)
-            ON CONFLICT (ListId, AdvisorId) DO NOTHING";
+            INSERT OR IGNORE INTO AdvisorListMembers (ListId, AdvisorId, Notes)
+            VALUES (@list, @adv, @notes)";
         cmd.Parameters.AddWithValue("@list", listId);
         cmd.Parameters.AddWithValue("@adv", advisorId);
         cmd.Parameters.AddWithValue("@notes", (object?)notes ?? DBNull.Value);
@@ -90,7 +89,7 @@ public class ListRepository
 
     public void RemoveFromList(int listId, int advisorId)
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM AdvisorListMembers WHERE ListId=@list AND AdvisorId=@adv";
         cmd.Parameters.AddWithValue("@list", listId);
@@ -100,7 +99,7 @@ public class ListRepository
 
     public List<Advisor> GetListMembers(int listId)
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
 
         // ── Query 1: All advisor rows for this list in a single JOIN ──────────
         using var mainCmd = conn.CreateCommand();
@@ -133,13 +132,14 @@ public class ListRepository
 
         // ── Query 2: Employment history for all members ───────────────────────
         using var empCmd = conn.CreateCommand();
-        empCmd.CommandText = $@"
-            SELECT AdvisorId, FirmName, FirmCrd, StartDate, EndDate, Position, Street
-            FROM EmploymentHistory
-            WHERE AdvisorId IN ({ids})
-            ORDER BY StartDate DESC";
-        using (var er = empCmd.ExecuteReader())
+        try
         {
+            empCmd.CommandText = $@"
+                SELECT AdvisorId, FirmName, FirmCrd, StartDate, EndDate, Position, Street
+                FROM EmploymentHistory
+                WHERE AdvisorId IN ({ids})
+                ORDER BY StartDate DESC";
+            using var er = empCmd.ExecuteReader();
             while (er.Read())
             {
                 int advisorId = er.GetInt32(0);
@@ -148,10 +148,32 @@ public class ListRepository
                     {
                         FirmName  = er.IsDBNull(1) ? "" : er.GetString(1),
                         FirmCrd   = er.IsDBNull(2) ? null : er.GetString(2),
-                        StartDate = er.IsDBNull(3) ? null : (DateTime?)er.GetDateTime(3),
-                        EndDate   = er.IsDBNull(4) ? null : (DateTime?)er.GetDateTime(4),
+                        StartDate = er.IsDBNull(3) ? null : (DateTime?)DateTime.Parse(er.GetString(3)),
+                        EndDate   = er.IsDBNull(4) ? null : (DateTime?)DateTime.Parse(er.GetString(4)),
                         Position  = er.IsDBNull(5) ? null : er.GetString(5),
                         Street    = er.IsDBNull(6) ? null : er.GetString(6),
+                    });
+            }
+        }
+        catch
+        {
+            // Fallback without Street column
+            using var empCmd2 = conn.CreateCommand();
+            empCmd2.CommandText = $@"
+                SELECT AdvisorId, FirmName, FirmCrd, StartDate, EndDate, Position
+                FROM EmploymentHistory WHERE AdvisorId IN ({ids}) ORDER BY StartDate DESC";
+            using var er2 = empCmd2.ExecuteReader();
+            while (er2.Read())
+            {
+                int advisorId = er2.GetInt32(0);
+                if (map.TryGetValue(advisorId, out var a))
+                    a.EmploymentHistory.Add(new EmploymentHistory
+                    {
+                        FirmName  = er2.IsDBNull(1) ? "" : er2.GetString(1),
+                        FirmCrd   = er2.IsDBNull(2) ? null : er2.GetString(2),
+                        StartDate = er2.IsDBNull(3) ? null : (DateTime?)DateTime.Parse(er2.GetString(3)),
+                        EndDate   = er2.IsDBNull(4) ? null : (DateTime?)DateTime.Parse(er2.GetString(4)),
+                        Position  = er2.IsDBNull(5) ? null : er2.GetString(5),
                     });
             }
         }
@@ -171,7 +193,7 @@ public class ListRepository
                     {
                         Type        = dr.IsDBNull(1) ? "" : dr.GetString(1),
                         Description = dr.IsDBNull(2) ? null : dr.GetString(2),
-                        Date        = dr.IsDBNull(3) ? null : (DateTime?)dr.GetDateTime(3),
+                        Date        = dr.IsDBNull(3) ? null : (DateTime?)DateTime.Parse(dr.GetString(3)),
                         Resolution  = dr.IsDBNull(4) ? null : dr.GetString(4),
                         Sanctions   = dr.IsDBNull(5) ? null : dr.GetString(5),
                         Source      = dr.IsDBNull(6) ? null : dr.GetString(6),
@@ -194,7 +216,7 @@ public class ListRepository
                     {
                         Name   = qr.IsDBNull(1) ? "" : qr.GetString(1),
                         Code   = qr.IsDBNull(2) ? null : qr.GetString(2),
-                        Date   = qr.IsDBNull(3) ? null : (DateTime?)qr.GetDateTime(3),
+                        Date   = qr.IsDBNull(3) ? null : (DateTime?)DateTime.Parse(qr.GetString(3)),
                         Status = qr.IsDBNull(4) ? null : qr.GetString(4),
                     });
             }
@@ -203,8 +225,11 @@ public class ListRepository
         return advisors;
     }
 
-    private static Advisor MapAdvisorRow(NpgsqlDataReader r)
+    private static Advisor MapAdvisorRow(SqliteDataReader r)
     {
+        DateTime? ParseDate(int col) =>
+            r.IsDBNull(col) ? null : (DateTime?)DateTime.Parse(r.GetString(col));
+
         return new Advisor
         {
             Id                 = r.GetInt32(0),
@@ -225,17 +250,17 @@ public class ListRepository
             CurrentFirmCrd     = r.IsDBNull(15) ? null : r.GetString(15),
             CurrentFirmId      = r.IsDBNull(16) ? null : (int?)r.GetInt32(16),
             RegistrationStatus = r.IsDBNull(17) ? null : r.GetString(17),
-            RegistrationDate   = r.IsDBNull(18) ? null : (DateTime?)r.GetDateTime(18),
+            RegistrationDate   = ParseDate(18),
             YearsOfExperience  = r.IsDBNull(19) ? null : (int?)r.GetInt32(19),
-            HasDisclosures     = !r.IsDBNull(20) && r.GetBoolean(20),
+            HasDisclosures     = !r.IsDBNull(20) && r.GetInt32(20) == 1,
             DisclosureCount    = r.IsDBNull(21) ? 0 : r.GetInt32(21),
             Source             = r.IsDBNull(22) ? null : r.GetString(22),
-            IsExcluded         = !r.IsDBNull(23) && r.GetBoolean(23),
+            IsExcluded         = !r.IsDBNull(23) && r.GetInt32(23) == 1,
             ExclusionReason    = r.IsDBNull(24) ? null : r.GetString(24),
-            IsImportedToCrm    = !r.IsDBNull(25) && r.GetBoolean(25),
+            IsImportedToCrm    = !r.IsDBNull(25) && r.GetInt32(25) == 1,
             CrmId              = r.IsDBNull(26) ? null : r.GetString(26),
-            CreatedAt          = r.IsDBNull(27) ? DateTime.Now : r.GetDateTime(27),
-            UpdatedAt          = r.IsDBNull(28) ? DateTime.Now : r.GetDateTime(28),
+            CreatedAt          = r.IsDBNull(27) ? DateTime.Now : DateTime.Parse(r.GetString(27)),
+            UpdatedAt          = r.IsDBNull(28) ? DateTime.Now : DateTime.Parse(r.GetString(28)),
             RecordType         = r.IsDBNull(29) ? null : r.GetString(29),
             Suffix             = r.IsDBNull(30) ? null : r.GetString(30),
             IapdLink           = r.IsDBNull(31) ? null : r.GetString(31),
@@ -247,7 +272,7 @@ public class ListRepository
 
     public List<int> GetListIdsForAdvisor(int advisorId)
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT ListId FROM AdvisorListMembers WHERE AdvisorId=@adv";
         cmd.Parameters.AddWithValue("@adv", advisorId);
@@ -259,7 +284,7 @@ public class ListRepository
 
     public void UpdateMemberNotes(int listId, int advisorId, string? notes)
     {
-        using var conn = _context.GetConnection();
+        var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "UPDATE AdvisorListMembers SET Notes=@notes WHERE ListId=@list AND AdvisorId=@adv";
         cmd.Parameters.AddWithValue("@notes", (object?)notes ?? DBNull.Value);

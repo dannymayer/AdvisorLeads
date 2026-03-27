@@ -1,32 +1,44 @@
-using Npgsql;
+using Microsoft.Data.Sqlite;
 
 namespace AdvisorLeads.Data;
 
 public class DatabaseContext : IDisposable
 {
     private readonly string _connectionString;
-    private readonly NpgsqlDataSource _dataSource;
+    private SqliteConnection? _connection;
+    private readonly SemaphoreSlim _dbLock = new SemaphoreSlim(1, 1);
 
-    public DatabaseContext(string connectionString)
+    public DatabaseContext(string databasePath)
     {
-        _connectionString = connectionString;
-        var builder = new NpgsqlDataSourceBuilder(connectionString);
-        _dataSource = builder.Build();
+        _connectionString = $"Data Source={databasePath}";
     }
 
-    public NpgsqlConnection GetConnection()
+    public SqliteConnection GetConnection()
     {
-        var conn = _dataSource.OpenConnection();
-        return conn;
+        if (_connection == null || _connection.State != System.Data.ConnectionState.Open)
+        {
+            _connection = new SqliteConnection(_connectionString);
+            _connection.Open();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                PRAGMA journal_mode=WAL;
+                PRAGMA foreign_keys=ON;
+                PRAGMA busy_timeout=5000;
+                PRAGMA cache_size=-8000;
+                PRAGMA temp_store=MEMORY;
+                PRAGMA mmap_size=268435456;";
+            cmd.ExecuteNonQuery();
+        }
+        return _connection;
     }
 
     public void InitializeDatabase()
     {
-        using var conn = GetConnection();
+        var conn = GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             CREATE TABLE IF NOT EXISTS Firms (
-                Id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 CrdNumber TEXT UNIQUE,
                 Name TEXT NOT NULL,
                 Address TEXT,
@@ -36,15 +48,15 @@ public class DatabaseContext : IDisposable
                 Phone TEXT,
                 Website TEXT,
                 BusinessType TEXT,
-                IsRegisteredWithSec BOOLEAN DEFAULT FALSE,
-                IsRegisteredWithFinra BOOLEAN DEFAULT FALSE,
+                IsRegisteredWithSec INTEGER DEFAULT 0,
+                IsRegisteredWithFinra INTEGER DEFAULT 0,
                 NumberOfAdvisors INTEGER,
-                RegistrationDate DATE,
+                RegistrationDate TEXT,
                 Source TEXT,
                 RecordType TEXT,
-                IsExcluded BOOLEAN DEFAULT FALSE,
-                CreatedAt TIMESTAMP DEFAULT NOW(),
-                UpdatedAt TIMESTAMP DEFAULT NOW(),
+                IsExcluded INTEGER DEFAULT 0,
+                CreatedAt TEXT DEFAULT (datetime('now')),
+                UpdatedAt TEXT DEFAULT (datetime('now')),
                 SECNumber TEXT,
                 SECRegion TEXT,
                 LegalName TEXT,
@@ -52,19 +64,11 @@ public class DatabaseContext : IDisposable
                 MailingAddress TEXT,
                 RegistrationStatus TEXT,
                 AumDescription TEXT,
-                StateOfOrganization TEXT,
-                Country TEXT,
-                NumberOfEmployees INTEGER,
-                LatestFilingDate TEXT,
-                RegulatoryAum NUMERIC,
-                RegulatoryAumNonDiscretionary NUMERIC,
-                NumClients INTEGER,
-                BrokerProtocolMember BOOLEAN DEFAULT FALSE,
-                BrokerProtocolUpdatedAt TIMESTAMP
+                StateOfOrganization TEXT
             );
 
             CREATE TABLE IF NOT EXISTS Advisors (
-                Id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 CrdNumber TEXT UNIQUE,
                 IapdNumber TEXT,
                 FirstName TEXT NOT NULL,
@@ -80,145 +84,236 @@ public class DatabaseContext : IDisposable
                 Qualifications TEXT,
                 CurrentFirmName TEXT,
                 CurrentFirmCrd TEXT,
-                CurrentFirmId INTEGER REFERENCES Firms(Id),
+                CurrentFirmId INTEGER,
                 RegistrationStatus TEXT,
-                RegistrationDate DATE,
+                RegistrationDate TEXT,
                 YearsOfExperience INTEGER,
-                HasDisclosures BOOLEAN DEFAULT FALSE,
+                HasDisclosures INTEGER DEFAULT 0,
                 DisclosureCount INTEGER DEFAULT 0,
                 Source TEXT,
                 RecordType TEXT,
-                IsExcluded BOOLEAN DEFAULT FALSE,
+                IsExcluded INTEGER DEFAULT 0,
                 ExclusionReason TEXT,
-                IsImportedToCrm BOOLEAN DEFAULT FALSE,
+                IsImportedToCrm INTEGER DEFAULT 0,
                 CrmId TEXT,
-                CreatedAt TIMESTAMP DEFAULT NOW(),
-                UpdatedAt TIMESTAMP DEFAULT NOW(),
+                CreatedAt TEXT DEFAULT (datetime('now')),
+                UpdatedAt TEXT DEFAULT (datetime('now')),
                 Suffix TEXT,
                 IapdLink TEXT,
                 RegAuthorities TEXT,
                 DisclosureFlags TEXT,
-                OtherNames TEXT
+                FOREIGN KEY (CurrentFirmId) REFERENCES Firms(Id)
             );
 
             CREATE TABLE IF NOT EXISTS EmploymentHistory (
-                Id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                AdvisorId INTEGER NOT NULL REFERENCES Advisors(Id) ON DELETE CASCADE,
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                AdvisorId INTEGER NOT NULL,
                 FirmName TEXT NOT NULL,
                 FirmCrd TEXT,
-                StartDate DATE,
-                EndDate DATE,
+                StartDate TEXT,
+                EndDate TEXT,
                 Position TEXT,
-                Street TEXT
+                FOREIGN KEY (AdvisorId) REFERENCES Advisors(Id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS Disclosures (
-                Id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                AdvisorId INTEGER NOT NULL REFERENCES Advisors(Id) ON DELETE CASCADE,
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                AdvisorId INTEGER NOT NULL,
                 Type TEXT NOT NULL,
                 Description TEXT,
-                Date DATE,
+                Date TEXT,
                 Resolution TEXT,
                 Sanctions TEXT,
-                Source TEXT
+                Source TEXT,
+                FOREIGN KEY (AdvisorId) REFERENCES Advisors(Id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS Qualifications (
-                Id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                AdvisorId INTEGER NOT NULL REFERENCES Advisors(Id) ON DELETE CASCADE,
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                AdvisorId INTEGER NOT NULL,
                 Name TEXT NOT NULL,
                 Code TEXT,
-                Date DATE,
-                Status TEXT
+                Date TEXT,
+                Status TEXT,
+                FOREIGN KEY (AdvisorId) REFERENCES Advisors(Id) ON DELETE CASCADE
             );
 
+            CREATE INDEX IF NOT EXISTS idx_advisors_lastname ON Advisors(LastName);
+            CREATE INDEX IF NOT EXISTS idx_advisors_state ON Advisors(State);
+            CREATE INDEX IF NOT EXISTS idx_advisors_firm ON Advisors(CurrentFirmCrd);
+            CREATE INDEX IF NOT EXISTS idx_advisors_crd ON Advisors(CrdNumber);
+
             CREATE TABLE IF NOT EXISTS AdvisorLists (
-                Id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 Name TEXT NOT NULL,
                 Description TEXT,
-                CreatedAt TIMESTAMP DEFAULT NOW(),
-                UpdatedAt TIMESTAMP DEFAULT NOW()
+                CreatedAt TEXT DEFAULT (datetime('now')),
+                UpdatedAt TEXT DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS AdvisorListMembers (
-                Id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                ListId INTEGER NOT NULL REFERENCES AdvisorLists(Id) ON DELETE CASCADE,
-                AdvisorId INTEGER NOT NULL REFERENCES Advisors(Id) ON DELETE CASCADE,
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ListId INTEGER NOT NULL,
+                AdvisorId INTEGER NOT NULL,
                 Notes TEXT,
-                AddedAt TIMESTAMP DEFAULT NOW(),
+                AddedAt TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (ListId) REFERENCES AdvisorLists(Id) ON DELETE CASCADE,
+                FOREIGN KEY (AdvisorId) REFERENCES Advisors(Id) ON DELETE CASCADE,
                 UNIQUE(ListId, AdvisorId)
             );
+            CREATE INDEX IF NOT EXISTS idx_listmembers_list ON AdvisorListMembers(ListId);
+            CREATE INDEX IF NOT EXISTS idx_listmembers_advisor ON AdvisorListMembers(AdvisorId);
         ";
         cmd.ExecuteNonQuery();
 
-        CreateIndexes(conn);
+        MigrateDatabase();
     }
 
-    private static void CreateIndexes(NpgsqlConnection conn)
+    // Adds columns introduced after initial release to existing databases,
+    // then creates any indices that depend on those new columns.
+    private void MigrateDatabase()
     {
-        var indexes = new[]
-        {
-            "CREATE INDEX IF NOT EXISTS idx_advisors_lastname ON Advisors(LastName)",
-            "CREATE INDEX IF NOT EXISTS idx_advisors_state ON Advisors(State)",
-            "CREATE INDEX IF NOT EXISTS idx_advisors_firm ON Advisors(CurrentFirmCrd)",
-            "CREATE INDEX IF NOT EXISTS idx_advisors_crd ON Advisors(CrdNumber)",
-            "CREATE INDEX IF NOT EXISTS idx_advisors_recordtype ON Advisors(RecordType)",
-            "CREATE INDEX IF NOT EXISTS idx_adv_state_type_status_name ON Advisors(State, RecordType, RegistrationStatus, LastName) WHERE IsExcluded = FALSE",
-            "CREATE INDEX IF NOT EXISTS idx_adv_source ON Advisors(Source)",
-            "CREATE INDEX IF NOT EXISTS idx_adv_disclosures ON Advisors(HasDisclosures) WHERE HasDisclosures = TRUE",
-            "CREATE INDEX IF NOT EXISTS idx_adv_crm ON Advisors(IsImportedToCrm) WHERE IsImportedToCrm = FALSE",
-            "CREATE INDEX IF NOT EXISTS idx_adv_active_state_type ON Advisors(State, RecordType, LastName) WHERE IsExcluded = FALSE",
-            "CREATE INDEX IF NOT EXISTS idx_emp_advisor ON EmploymentHistory(AdvisorId)",
-            "CREATE INDEX IF NOT EXISTS idx_disc_advisor ON Disclosures(AdvisorId)",
-            "CREATE INDEX IF NOT EXISTS idx_qual_advisor ON Qualifications(AdvisorId)",
-            "CREATE INDEX IF NOT EXISTS idx_firms_state_status ON Firms(State, RegistrationStatus, Name)",
-            "CREATE INDEX IF NOT EXISTS idx_listmembers_list ON AdvisorListMembers(ListId)",
-            "CREATE INDEX IF NOT EXISTS idx_listmembers_advisor ON AdvisorListMembers(AdvisorId)"
-        };
+        var conn = GetConnection();
+        TryAddColumn(conn, "Advisors", "RecordType", "TEXT");
+        TryAddColumn(conn, "Firms", "RecordType", "TEXT");
 
-        foreach (var sql in indexes)
+        // Advisor new columns
+        TryAddColumn(conn, "Advisors", "Suffix", "TEXT");
+        TryAddColumn(conn, "Advisors", "IapdLink", "TEXT");
+        TryAddColumn(conn, "Advisors", "RegAuthorities", "TEXT");
+        TryAddColumn(conn, "Advisors", "DisclosureFlags", "TEXT");
+        TryAddColumn(conn, "Advisors", "OtherNames", "TEXT");
+
+        // EmploymentHistory new columns
+        TryAddColumn(conn, "EmploymentHistory", "Street", "TEXT");
+
+        // Firm new columns
+        TryAddColumn(conn, "Firms", "SECNumber", "TEXT");
+        TryAddColumn(conn, "Firms", "SECRegion", "TEXT");
+        TryAddColumn(conn, "Firms", "LegalName", "TEXT");
+        TryAddColumn(conn, "Firms", "FaxPhone", "TEXT");
+        TryAddColumn(conn, "Firms", "MailingAddress", "TEXT");
+        TryAddColumn(conn, "Firms", "RegistrationStatus", "TEXT");
+        TryAddColumn(conn, "Firms", "AumDescription", "TEXT");
+        TryAddColumn(conn, "Firms", "StateOfOrganization", "TEXT");
+        TryAddColumn(conn, "Firms", "Country", "TEXT");
+        TryAddColumn(conn, "Firms", "NumberOfEmployees", "INTEGER");
+        TryAddColumn(conn, "Firms", "LatestFilingDate", "TEXT");
+        TryAddColumn(conn, "Firms", "RegulatoryAum",        "REAL");
+        TryAddColumn(conn, "Firms", "RegulatoryAumNonDiscretionary", "REAL");
+        TryAddColumn(conn, "Firms", "NumClients",            "INTEGER");
+        TryAddColumn(conn, "Firms", "BrokerProtocolMember",  "INTEGER DEFAULT 0");
+        TryAddColumn(conn, "Firms", "BrokerProtocolUpdatedAt", "TEXT");
+
+        // Create the RecordType index now that the column is guaranteed to exist.
+        TryCreateIndex(conn, "idx_advisors_recordtype", "CREATE INDEX IF NOT EXISTS idx_advisors_recordtype ON Advisors(RecordType)");
+
+        // Composite covering index for the most common recruiter query:
+        // State + RecordType + RegistrationStatus + LastName
+        TryCreateIndex(conn, "idx_adv_state_type_status_name",
+            "CREATE INDEX IF NOT EXISTS idx_adv_state_type_status_name ON Advisors(State, RecordType, RegistrationStatus, LastName) WHERE IsExcluded = 0");
+
+        // Source filter (normalised searches benefit from this)
+        TryCreateIndex(conn, "idx_adv_source",
+            "CREATE INDEX IF NOT EXISTS idx_adv_source ON Advisors(Source)");
+
+        // Partial index for advisors with disclosures (low cardinality, high selectivity)
+        TryCreateIndex(conn, "idx_adv_disclosures",
+            "CREATE INDEX IF NOT EXISTS idx_adv_disclosures ON Advisors(HasDisclosures) WHERE HasDisclosures = 1");
+
+        // Partial index for advisors not yet imported to CRM
+        TryCreateIndex(conn, "idx_adv_crm",
+            "CREATE INDEX IF NOT EXISTS idx_adv_crm ON Advisors(IsImportedToCrm) WHERE IsImportedToCrm = 0");
+
+        // Covering index for active-only queries (skips excluded rows at index level)
+        TryCreateIndex(conn, "idx_adv_active_state_type",
+            "CREATE INDEX IF NOT EXISTS idx_adv_active_state_type ON Advisors(State, RecordType, LastName) WHERE IsExcluded = 0");
+
+        // Related data lookup indices (used by N+1 fix and detail view)
+        TryCreateIndex(conn, "idx_emp_advisor",
+            "CREATE INDEX IF NOT EXISTS idx_emp_advisor ON EmploymentHistory(AdvisorId)");
+        TryCreateIndex(conn, "idx_disc_advisor",
+            "CREATE INDEX IF NOT EXISTS idx_disc_advisor ON Disclosures(AdvisorId)");
+        TryCreateIndex(conn, "idx_qual_advisor",
+            "CREATE INDEX IF NOT EXISTS idx_qual_advisor ON Qualifications(AdvisorId)");
+
+        // Firm lookup index
+        TryCreateIndex(conn, "idx_firms_state_status",
+            "CREATE INDEX IF NOT EXISTS idx_firms_state_status ON Firms(State, RegistrationStatus, Name)");
+
+        // List member lookups
+        TryCreateIndex(conn, "idx_listmembers_list",
+            "CREATE INDEX IF NOT EXISTS idx_listmembers_list ON AdvisorListMembers(ListId)");
+        TryCreateIndex(conn, "idx_listmembers_advisor",
+            "CREATE INDEX IF NOT EXISTS idx_listmembers_advisor ON AdvisorListMembers(AdvisorId)");
+    }
+
+    private static void TryAddColumn(SqliteConnection conn, string table, string column, string type)
+    {
+        try
         {
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = sql;
+            cmd.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {type}";
             cmd.ExecuteNonQuery();
         }
+        catch { /* column already exists — ignore */ }
+    }
+
+    private static void TryCreateIndex(SqliteConnection conn, string indexName, string createSql)
+    {
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = createSql;
+            cmd.ExecuteNonQuery();
+        }
+        catch { /* index already exists or column missing — ignore */ }
     }
 
     public void Dispose()
     {
-        _dataSource.Dispose();
+        _connection?.Dispose();
+        _dbLock.Dispose();
     }
 
     /// <summary>
-    /// Executes a synchronous database operation using a pooled connection.
+    /// Executes a synchronous database operation under the DB lock, preventing
+    /// concurrent access from the UI thread and background service threads.
     /// </summary>
-    public T Execute<T>(Func<NpgsqlConnection, T> work)
+    public T Execute<T>(Func<SqliteConnection, T> work)
     {
-        using var conn = GetConnection();
-        return work(conn);
+        _dbLock.Wait();
+        try { return work(GetConnection()); }
+        finally { _dbLock.Release(); }
     }
 
     /// <summary>
-    /// Executes an async database operation using a pooled connection.
+    /// Async version — awaits the lock so the calling thread is not blocked.
     /// </summary>
-    public async Task<T> ExecuteAsync<T>(Func<NpgsqlConnection, T> work)
+    public async Task<T> ExecuteAsync<T>(Func<SqliteConnection, T> work)
     {
-        await using var conn = await _dataSource.OpenConnectionAsync().ConfigureAwait(false);
-        return work(conn);
+        await _dbLock.WaitAsync().ConfigureAwait(false);
+        try { return work(GetConnection()); }
+        finally { _dbLock.Release(); }
     }
 
     /// <summary>
-    /// Deletes all rows from every table and resets identity sequences.
+    /// Deletes all rows from every table and resets autoincrement counters.
     /// Used by the debug reset flow.
     /// </summary>
     public void ClearAllData()
     {
-        using var conn = GetConnection();
+        var conn = GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            TRUNCATE TABLE Qualifications, Disclosures, EmploymentHistory,
-                           AdvisorListMembers, AdvisorLists, Advisors, Firms
-            RESTART IDENTITY CASCADE;
+            DELETE FROM Qualifications;
+            DELETE FROM Disclosures;
+            DELETE FROM EmploymentHistory;
+            DELETE FROM Advisors;
+            DELETE FROM Firms;
+            DELETE FROM AdvisorListMembers;
+            DELETE FROM AdvisorLists;
+            DELETE FROM sqlite_sequence WHERE name IN ('AdvisorListMembers','AdvisorLists','Qualifications','Disclosures','EmploymentHistory','Advisors','Firms');
         ";
         cmd.ExecuteNonQuery();
     }
