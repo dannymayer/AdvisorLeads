@@ -16,17 +16,24 @@ public class MainForm : Form
     private FinraService _finra = null!;
     private SecIapdService _secStub = null!;
     private SecCompilationService _sec = null!;
+    private SecMonthlyFirmService _secMonthly = null!;
     private DataSyncService _sync = null!;
     private BackgroundDataService _bgData = null!;
     private WealthboxService? _wealthbox;
+    private ListRepository _listRepo = null!;
     private string _wealthboxToken = string.Empty;
 
     // UI components
     private FilterPanel _filterPanel = null!;
+    private FirmFilterPanel _firmFilterPanel = null!;
     private ListView _listView = null!;
     private AdvisorDetailCard _detailCard = null!;
     private SplitContainer _mainSplit = null!;
     private SplitContainer _contentSplit = null!;
+    private SplitContainer _firmContentSplit = null!;
+    private TabControl _mainTabs = null!;
+    private ListView _firmListView = null!;
+    private FirmDetailPanel _firmDetailPanel = null!;
     private StatusStrip _statusBar = null!;
     private ToolStripStatusLabel _lblStatus = null!;
     private ToolStripStatusLabel _lblCount = null!;
@@ -35,6 +42,14 @@ public class MainForm : Form
     // State
     private List<Advisor> _currentAdvisors = new();
     private Advisor? _selectedAdvisor;
+    private List<Firm> _currentFirms = new();
+    private Firm? _selectedFirm;
+    private ListViewItem[]? _lvCache;
+    private int _lvCacheStart = 0;
+    private int _totalAdvisorCount = 0;
+    private int _currentPage = 1;
+    private ToolStripButton _btnPrevPage = null!;
+    private ToolStripButton _btnNextPage = null!;
 
     public MainForm()
     {
@@ -62,6 +77,9 @@ public class MainForm : Form
         _sync = new DataSyncService(_finra, _secStub, _repo);
         _bgData = new BackgroundDataService(_finra, _sec, _repo);
         _bgData.DataUpdated += OnBackgroundDataUpdated;
+        _secMonthly = new SecMonthlyFirmService();
+        _bgData.SetSecMonthlyService(_secMonthly);
+        _listRepo = new ListRepository(_db);
 
         // Load saved Wealthbox token
         _wealthboxToken = LoadSetting("WealthboxToken") ?? string.Empty;
@@ -85,7 +103,11 @@ public class MainForm : Form
         _statusBar = new StatusStrip();
         _lblStatus = new ToolStripStatusLabel("Ready") { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
         _lblCount = new ToolStripStatusLabel("0 advisors") { TextAlign = ContentAlignment.MiddleRight };
-        _statusBar.Items.AddRange(new ToolStripItem[] { _lblStatus, _lblCount });
+        _btnPrevPage = new ToolStripButton("◀ Prev") { Enabled = false };
+        _btnNextPage = new ToolStripButton("Next ▶") { Enabled = false };
+        _btnPrevPage.Click += (_, _) => NavigateAdvisorPage(-1);
+        _btnNextPage.Click += (_, _) => NavigateAdvisorPage(+1);
+        _statusBar.Items.AddRange(new ToolStripItem[] { _lblStatus, _lblCount, new ToolStripSeparator(), _btnPrevPage, _btnNextPage });
         this.Controls.Add(_statusBar);
 
         // Main split: filter | content
@@ -101,26 +123,62 @@ public class MainForm : Form
         _filterPanel.FiltersChanged += (_, _) => LoadAdvisors();
         _mainSplit.Panel1.Controls.Add(_filterPanel);
 
-        // Content split: list | detail
+        // Content split for individuals: list | detail
         _contentSplit = new SplitContainer
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical
         };
 
-        // Results list
+        // Results list (individuals)
         BuildListView();
         _contentSplit.Panel1.Controls.Add(_listView);
 
-        // Detail card
+        // Detail card (individuals)
         _detailCard = new AdvisorDetailCard { Dock = DockStyle.Fill };
         _detailCard.ExcludeRequested += OnExcludeRequested;
         _detailCard.RestoreRequested += OnRestoreRequested;
         _detailCard.ImportCrmRequested += OnImportCrmRequested;
         _detailCard.RefreshRequested += OnRefreshRequested;
+        _detailCard.AddToListRequested += (_, advisor) => OnAddToList(advisor);
         _contentSplit.Panel2.Controls.Add(_detailCard);
 
-        _mainSplit.Panel2.Controls.Add(_contentSplit);
+        // Content split for firms: list | detail
+        _firmContentSplit = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical
+        };
+
+        BuildFirmListView();
+        _firmFilterPanel = new FirmFilterPanel { Dock = DockStyle.Top };
+        _firmFilterPanel.FiltersChanged += (_, _) => LoadFirms();
+
+        var firmListPanel = new Panel { Dock = DockStyle.Fill };
+        firmListPanel.Controls.Add(_firmListView);
+        firmListPanel.Controls.Add(_firmFilterPanel);
+        _firmContentSplit.Panel1.Controls.Add(firmListPanel);
+
+        _firmDetailPanel = new FirmDetailPanel { Dock = DockStyle.Fill };
+        _firmContentSplit.Panel2.Controls.Add(_firmDetailPanel);
+
+        // Tab control
+        _mainTabs = new TabControl { Dock = DockStyle.Fill };
+        var tabIndividuals = new TabPage("Individuals") { Padding = new Padding(0) };
+        tabIndividuals.Controls.Add(_contentSplit);
+        var tabFirms = new TabPage("Firms") { Padding = new Padding(0) };
+        tabFirms.Controls.Add(_firmContentSplit);
+        _mainTabs.TabPages.Add(tabIndividuals);
+        _mainTabs.TabPages.Add(tabFirms);
+        _mainTabs.SelectedIndexChanged += (_, _) =>
+        {
+            if (_mainTabs.SelectedIndex == 0)
+                LoadAdvisors();
+            else
+                LoadFirms();
+        };
+
+        _mainSplit.Panel2.Controls.Add(_mainTabs);
         this.Controls.Add(_mainSplit);
         this.Load += (_, _) => ApplyInitialSplitLayout();
     }
@@ -130,9 +188,11 @@ public class MainForm : Form
         _mainSplit.Panel1MinSize = 180;
         _mainSplit.Panel2MinSize = 400;
         _contentSplit.Panel1MinSize = 280;
+        _firmContentSplit.Panel1MinSize = 280;
 
         SetSafeSplitterDistance(_mainSplit, MainSplitDefaultDistance);
         SetSafeSplitterDistance(_contentSplit, ContentSplitDefaultDistance);
+        SetSafeSplitterDistance(_firmContentSplit, ContentSplitDefaultDistance);
     }
 
     private static void SetSafeSplitterDistance(SplitContainer splitContainer, int preferredDistance)
@@ -190,7 +250,26 @@ public class MainForm : Form
                 "About AdvisorLeads", MessageBoxButtons.OK, MessageBoxIcon.Information));
         helpMenu.DropDownItems.Add(aboutItem);
 
-        _menuStrip.Items.AddRange(new ToolStripItem[] { dataMenu, crmMenu, viewMenu, helpMenu });
+        // Debug menu
+        var debugMenu = new ToolStripMenuItem("&Debug")
+        {
+            ForeColor = Color.FromArgb(180, 60, 60)
+        };
+        var resetItem = new ToolStripMenuItem("Clear All Data && Re-run Setup...", null, OnDebugReset)
+        {
+            ToolTipText = "Deletes all advisor data and the SEC cache, then re-runs the initial setup."
+        };
+        debugMenu.DropDownItems.Add(resetItem);
+
+        // Lists menu
+        var listsMenu = new ToolStripMenuItem("&Lists");
+        var manageLists = new ToolStripMenuItem("&Manage Lists...", null, OnManageLists) { ShortcutKeys = Keys.Control | Keys.L };
+        var addToListItem = new ToolStripMenuItem("Add Selected to List...", null, (_, _) => { if (_selectedAdvisor != null) OnAddToList(_selectedAdvisor); });
+        listsMenu.DropDownItems.AddRange(new ToolStripItem[] { manageLists, new ToolStripSeparator(), addToListItem });
+
+        _menuStrip.Items.AddRange(new ToolStripItem[] { dataMenu, crmMenu, listsMenu, viewMenu, helpMenu, debugMenu });
+        this.Controls.Add(_menuStrip);
+        this.MainMenuStrip = _menuStrip;
         this.Controls.Add(_menuStrip);
         this.MainMenuStrip = _menuStrip;
     }
@@ -204,20 +283,26 @@ public class MainForm : Form
             FullRowSelect = true,
             GridLines = true,
             MultiSelect = false,
+            VirtualMode = true,
             Font = new Font("Segoe UI", 9),
             BorderStyle = BorderStyle.None
         };
 
         _listView.Columns.Add("Name", 180);
+        _listView.Columns.Add("Type", 95);
         _listView.Columns.Add("CRD", 70);
-        _listView.Columns.Add("Firm", 180);
+        _listView.Columns.Add("Firm", 175);
         _listView.Columns.Add("State", 50);
+        _listView.Columns.Add("City", 65);
         _listView.Columns.Add("Status", 90);
         _listView.Columns.Add("Licenses", 100);
+        _listView.Columns.Add("Exp.", 50);
         _listView.Columns.Add("Disclosures", 85);
-        _listView.Columns.Add("Source", 80);
+        _listView.Columns.Add("Source", 70);
         _listView.Columns.Add("Updated", 90);
 
+        _listView.RetrieveVirtualItem += OnRetrieveVirtualItem;
+        _listView.CacheVirtualItems += OnCacheVirtualItems;
         _listView.SelectedIndexChanged += OnListViewSelectionChanged;
         _listView.ColumnClick += OnColumnClick;
 
@@ -225,6 +310,7 @@ public class MainForm : Form
         var contextMenu = new ContextMenuStrip();
         contextMenu.Items.Add("View Details", null, (_, _) => { if (_selectedAdvisor != null) ShowAdvisorDetail(_selectedAdvisor.Id); });
         contextMenu.Items.Add("Refresh Data", null, (_, _) => { if (_selectedAdvisor != null) OnRefreshRequested(this, _selectedAdvisor); });
+        contextMenu.Items.Add("Add to List...", null, (_, _) => { if (_selectedAdvisor != null) OnAddToList(_selectedAdvisor); });
         contextMenu.Items.Add("-");
         contextMenu.Items.Add("Import to Wealthbox", null, (_, _) => { if (_selectedAdvisor != null) OnImportCrmRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("-");
@@ -233,54 +319,222 @@ public class MainForm : Form
         _listView.ContextMenuStrip = contextMenu;
     }
 
-    private void LoadAdvisors()
+    private void BuildFirmListView()
+    {
+        _firmListView = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false,
+            Font = new Font("Segoe UI", 9),
+            BorderStyle = BorderStyle.None
+        };
+
+        _firmListView.Columns.Add("Name", 200);
+        _firmListView.Columns.Add("CRD", 70);
+        _firmListView.Columns.Add("SEC #", 90);
+        _firmListView.Columns.Add("State", 50);
+        _firmListView.Columns.Add("City", 110);
+        _firmListView.Columns.Add("Phone", 110);
+        _firmListView.Columns.Add("Org Type", 110);
+        _firmListView.Columns.Add("Employees", 80);
+        _firmListView.Columns.Add("Status", 90);
+        _firmListView.Columns.Add("Source", 55);
+        _firmListView.Columns.Add("Updated", 90);
+
+        _firmListView.SelectedIndexChanged += OnFirmListViewSelectionChanged;
+    }
+
+    private async void LoadFirms()
     {
         try
         {
-            var filter = _filterPanel.GetFilter();
-            _currentAdvisors = _repo.GetAdvisors(filter);
+            var filter = _firmFilterPanel?.GetFilter();
+            List<Firm> firms = null!;
+            await Task.Run(() => firms = _repo.GetFirms(filter));
+            _currentFirms = firms;
 
-            _listView.BeginUpdate();
-            _listView.Items.Clear();
+            _firmListView.BeginUpdate();
+            _firmListView.Items.Clear();
 
-            foreach (var advisor in _currentAdvisors)
+            foreach (var firm in _currentFirms)
             {
-                var item = new ListViewItem(advisor.FullName);
-                item.SubItems.Add(advisor.CrdNumber ?? "");
-                item.SubItems.Add(advisor.CurrentFirmName ?? "");
-                item.SubItems.Add(advisor.State ?? "");
-                item.SubItems.Add(advisor.RegistrationStatus ?? "");
-                item.SubItems.Add(advisor.Licenses ?? "");
-                item.SubItems.Add(advisor.HasDisclosures ? $"Yes ({advisor.DisclosureCount})" : "No");
-                item.SubItems.Add(advisor.Source ?? "");
-                item.SubItems.Add(advisor.UpdatedAt.ToString("yyyy-MM-dd"));
-                item.Tag = advisor.Id;
-
-                // Visual cues
-                if (advisor.IsExcluded)
-                {
-                    item.ForeColor = Color.Gray;
-                    item.Font = new Font("Segoe UI", 9, FontStyle.Strikeout);
-                }
-                else if (advisor.HasDisclosures)
-                {
-                    item.BackColor = Color.FromArgb(255, 250, 240);
-                }
-                if (advisor.IsImportedToCrm)
-                {
-                    item.ImageIndex = 0;
-                }
-
-                _listView.Items.Add(item);
+                var item = new ListViewItem(firm.Name);
+                item.SubItems.Add(firm.CrdNumber ?? "");
+                item.SubItems.Add(firm.SECNumber ?? "");
+                item.SubItems.Add(firm.State ?? "");
+                item.SubItems.Add(firm.City ?? "");
+                item.SubItems.Add(firm.Phone ?? "");
+                item.SubItems.Add(firm.BusinessType ?? "");
+                item.SubItems.Add(firm.NumberOfAdvisors?.ToString() ?? "");
+                item.SubItems.Add(firm.RegistrationStatus ?? "");
+                item.SubItems.Add(firm.Source ?? "");
+                item.SubItems.Add(firm.UpdatedAt.ToString("yyyy-MM-dd"));
+                item.Tag = firm.Id;
+                _firmListView.Items.Add(item);
             }
 
-            _listView.EndUpdate();
-            _lblCount.Text = $"{_currentAdvisors.Count} advisor{(_currentAdvisors.Count != 1 ? "s" : "")}";
+            _firmListView.EndUpdate();
+            _lblCount.Text = $"{_currentFirms.Count} firm{(_currentFirms.Count != 1 ? "s" : "")}";
             _lblStatus.Text = "Ready";
         }
         catch (Exception ex)
         {
-            _lblStatus.Text = $"Error loading advisors: {ex.Message}";
+            _lblStatus.Text = $"Error loading firms: {ex.Message}";
+        }
+    }
+
+    private void OnFirmListViewSelectionChanged(object? sender, EventArgs e)
+    {
+        if (_firmListView.SelectedItems.Count == 0) return;
+        if (_firmListView.SelectedItems[0].Tag is not int id) return;
+        _selectedFirm = _currentFirms.FirstOrDefault(f => f.Id == id);
+        if (_selectedFirm != null)
+            _firmDetailPanel.ShowFirm(_selectedFirm);
+    }
+
+    private void LoadAdvisors() => LoadAdvisorsPageAsync(1);
+
+    private async void LoadAdvisorsPageAsync(int page)
+    {
+        SetStatus("Loading...");
+        _filterPanel.Enabled = false;
+        _btnPrevPage.Enabled = false;
+        _btnNextPage.Enabled = false;
+        try
+        {
+            var filter = _filterPanel.GetFilter();
+            filter.PageNumber = page;
+
+            List<Advisor> advisors = null!;
+            int total = 0;
+            await Task.Run(() =>
+            {
+                advisors = _repo.GetAdvisors(filter);
+                total = advisors.Count < filter.PageSize
+                    ? (page - 1) * filter.PageSize + advisors.Count
+                    : _repo.GetAdvisorCount(filter);
+            });
+
+            _currentAdvisors = advisors;
+            _totalAdvisorCount = total;
+            _currentPage = page;
+
+            _lvCache = null;
+            _lvCacheStart = 0;
+            _listView.VirtualListSize = 0;
+            _listView.VirtualListSize = _currentAdvisors.Count;
+            _listView.Invalidate();
+
+            UpdateAdvisorCountLabel(filter);
+            SetStatus("Ready");
+
+            int totalPages = (int)Math.Ceiling((double)total / filter.PageSize);
+            _btnPrevPage.Enabled = page > 1;
+            _btnNextPage.Enabled = page < totalPages;
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Error loading advisors: {ex.Message}");
+        }
+        finally
+        {
+            _filterPanel.Enabled = true;
+        }
+    }
+
+    private void NavigateAdvisorPage(int delta)
+    {
+        int page = Math.Max(1, _currentPage + delta);
+        LoadAdvisorsPageAsync(page);
+    }
+
+    private void UpdateAdvisorCountLabel(SearchFilter filter)
+    {
+        int showing = _currentAdvisors.Count;
+        int total = _totalAdvisorCount;
+        int page = filter.PageNumber;
+        int pageSize = filter.PageSize;
+
+        if (total <= pageSize)
+            _lblCount.Text = $"{total} advisor{(total != 1 ? "s" : "")}";
+        else
+        {
+            int totalPages = (int)Math.Ceiling((double)total / pageSize);
+            _lblCount.Text = $"{showing} of {total:N0} advisors (page {page}/{totalPages})";
+        }
+    }
+
+    private ListViewItem BuildListViewItem(Advisor advisor)
+    {
+        var item = new ListViewItem(advisor.FullName);
+        item.SubItems.Add(advisor.RecordType ?? "");
+        item.SubItems.Add(advisor.CrdNumber ?? "");
+        item.SubItems.Add(advisor.CurrentFirmName ?? "");
+        item.SubItems.Add(advisor.State ?? "");
+        item.SubItems.Add(advisor.City ?? "");
+        item.SubItems.Add(advisor.RegistrationStatus ?? "");
+        item.SubItems.Add(advisor.Licenses ?? "");
+        item.SubItems.Add(advisor.YearsOfExperience.HasValue ? advisor.YearsOfExperience.Value.ToString() : "");
+        item.SubItems.Add(advisor.HasDisclosures ? $"Yes ({advisor.DisclosureCount})" : "No");
+        item.SubItems.Add(advisor.Source ?? "");
+        item.SubItems.Add(advisor.UpdatedAt.ToString("yyyy-MM-dd"));
+        item.Tag = advisor.Id;
+
+        if (advisor.IsExcluded)
+        {
+            item.ForeColor = Color.Gray;
+            item.Font = new Font("Segoe UI", 9, FontStyle.Strikeout);
+        }
+        else if (advisor.HasDisclosures)
+        {
+            item.BackColor = Color.FromArgb(255, 250, 240);
+        }
+        else if (!advisor.IsImportedToCrm
+            && advisor.RegistrationStatus == "Active"
+            && advisor.RecordType == "Investment Advisor Representative")
+        {
+            item.BackColor = Color.FromArgb(240, 255, 240);
+        }
+        if (advisor.IsImportedToCrm)
+            item.ForeColor = Color.FromArgb(100, 60, 160);
+
+        return item;
+    }
+
+    private void OnRetrieveVirtualItem(object? sender, RetrieveVirtualItemEventArgs e)
+    {
+        if (_lvCache != null
+            && e.ItemIndex >= _lvCacheStart
+            && e.ItemIndex < _lvCacheStart + _lvCache.Length)
+        {
+            e.Item = _lvCache[e.ItemIndex - _lvCacheStart];
+            return;
+        }
+        if (e.ItemIndex >= 0 && e.ItemIndex < _currentAdvisors.Count)
+            e.Item = BuildListViewItem(_currentAdvisors[e.ItemIndex]);
+        else
+            e.Item = new ListViewItem("?");
+    }
+
+    private void OnCacheVirtualItems(object? sender, CacheVirtualItemsEventArgs e)
+    {
+        if (_lvCache != null
+            && e.StartIndex >= _lvCacheStart
+            && e.EndIndex <= _lvCacheStart + _lvCache.Length - 1)
+            return;
+
+        _lvCacheStart = e.StartIndex;
+        int len = e.EndIndex - e.StartIndex + 1;
+        _lvCache = new ListViewItem[len];
+        for (int i = 0; i < len; i++)
+        {
+            int idx = e.StartIndex + i;
+            _lvCache[i] = idx < _currentAdvisors.Count
+                ? BuildListViewItem(_currentAdvisors[idx])
+                : new ListViewItem("?");
         }
     }
 
@@ -290,49 +544,45 @@ public class MainForm : Form
         {
             var states = _repo.GetDistinctStates();
             _filterPanel.PopulateStates(states);
+
+            var firmStates = _repo.GetDistinctFirmStates();
+            _firmFilterPanel.PopulateStates(firmStates);
         }
         catch { /* ignore if DB not ready */ }
     }
 
-    private async void OnFormShown(object? sender, EventArgs e)
+    private void OnFormShown(object? sender, EventArgs e)
     {
         if (!_bgData.IsDatabasePopulated())
         {
-            // First run — show setup dialog while populating the database.
             using var dlg = new InitialSetupDialog();
-            var cts = new CancellationTokenSource();
-            dlg.SetCancellationToken(cts);
-
-            var progress = new Progress<string>(msg => dlg.SetProgress(msg));
-
-            // Start the data fetch on a background thread, then close the dialog when done.
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var count = await _bgData.PopulateInitialDataAsync(progress, cts.Token);
-                    dlg.SetComplete(count);
-                }
-                catch (OperationCanceledException)
-                {
-                    // User chose to skip.
-                }
-                catch (Exception ex)
-                {
-                    if (dlg.IsHandleCreated)
-                        dlg.BeginInvoke(() => dlg.SetProgress($"Error: {ex.Message}. You can fetch data later from Data → Fetch New Data."));
-                }
-            });
-
+            dlg.WorkFactory = (progress, token) => _bgData.PopulateInitialDataAsync(progress, token);
             dlg.ShowDialog(this);
 
-            // Reload the UI with whatever data was fetched.
             LoadAdvisors();
             LoadFilterOptions();
         }
 
-        // Start periodic background refresh (every 60 minutes).
         _bgData.StartBackgroundRefresh(intervalMinutes: 60);
+
+        // Check monthly SEC firm data in the background without blocking UI startup.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var progress = new Progress<string>(msg => BeginInvoke(() => SetStatus(msg)));
+                await _bgData.CheckAndUpdateSecFirmsAsync(
+                    LoadSetting,
+                    SaveSetting,
+                    progress,
+                    CancellationToken.None);
+                BeginInvoke(() => LoadFirms());
+            }
+            catch (Exception ex)
+            {
+                BeginInvoke(() => SetStatus($"SEC firm update failed: {ex.Message}"));
+            }
+        });
     }
 
     private void OnBackgroundDataUpdated()
@@ -342,16 +592,20 @@ public class MainForm : Form
             BeginInvoke(OnBackgroundDataUpdated);
             return;
         }
-        LoadAdvisors();
+        if (_mainTabs.SelectedIndex == 1)
+            LoadFirms();
+        else
+            LoadAdvisors();
         LoadFilterOptions();
         SetStatus("Background data refresh complete.");
     }
 
     private void OnListViewSelectionChanged(object? sender, EventArgs e)
     {
-        if (_listView.SelectedItems.Count == 0) return;
-        if (_listView.SelectedItems[0].Tag is not int id) return;
-        _selectedAdvisor = _currentAdvisors.FirstOrDefault(a => a.Id == id);
+        if (_listView.SelectedIndices.Count == 0) return;
+        int idx = _listView.SelectedIndices[0];
+        if (idx < 0 || idx >= _currentAdvisors.Count) return;
+        _selectedAdvisor = _currentAdvisors[idx];
 
         if (_selectedAdvisor != null)
             ShowAdvisorDetail(_selectedAdvisor.Id);
@@ -371,12 +625,16 @@ public class MainForm : Form
         var col = e.Column switch
         {
             0 => "LastName",
-            1 => "CrdNumber",
-            2 => "CurrentFirmName",
-            3 => "State",
-            4 => "RegistrationStatus",
-            6 => "HasDisclosures",
-            8 => "UpdatedAt",
+            1 => "RecordType",
+            2 => "CrdNumber",
+            3 => "CurrentFirmName",
+            4 => "State",
+            // 5 = City — no direct sort supported
+            6 => "RegistrationStatus",
+            // 7 = Licenses — no sort
+            8 => "YearsOfExperience",
+            // 9 = Disclosures
+            11 => "UpdatedAt",
             _ => "LastName"
         };
         if (filter.SortBy == col)
@@ -556,6 +814,87 @@ public class MainForm : Form
                 : new WealthboxService(_wealthboxToken);
             SetStatus("Wealthbox settings saved.");
         }
+    }
+
+    private async void OnDebugReset(object? sender, EventArgs e)
+    {
+        var confirm = MessageBox.Show(
+            "This will permanently delete ALL advisor and firm data from the local database " +
+            "and clear the SEC cache, then re-run the initial setup from scratch.\n\n" +
+            "Continue?",
+            "Clear All Data & Re-run Setup",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+
+        if (confirm != DialogResult.Yes) return;
+
+        // Stop background refresh so it doesn't interfere while we wipe the DB.
+        _bgData.StopBackgroundRefresh();
+        _lvCache = null;
+        _lvCacheStart = 0;
+        _listView.VirtualListSize = 0;
+        _firmListView.Items.Clear();
+        _selectedAdvisor = null;
+        _selectedFirm = null;
+        _currentAdvisors.Clear();
+        _currentFirms.Clear();
+        SetStatus("Clearing data...");
+
+        // Wipe the database and SEC cache.
+        await Task.Run(() =>
+        {
+            _db.ClearAllData();
+            _sec.ClearCache();
+        });
+
+        SetStatus("Data cleared. Starting setup...");
+        LoadAdvisors();
+
+        using var setupDlg = new InitialSetupDialog();
+        setupDlg.WorkFactory = (progress, token) => _bgData.PopulateInitialDataAsync(progress, token);
+        setupDlg.ShowDialog(this);
+
+        LoadAdvisors();
+        LoadFilterOptions();
+
+        _bgData.StartBackgroundRefresh(intervalMinutes: 60);
+        SetStatus("Setup complete.");
+    }
+
+    private void OnManageLists(object? sender, EventArgs e)
+    {
+        using var form = new ListManagerForm(
+            _listRepo, _repo, _wealthbox,
+            advisorId =>
+            {
+                if (InvokeRequired) BeginInvoke(() => LoadAdvisors());
+                else LoadAdvisors();
+            });
+        form.ShowDialog(this);
+    }
+
+    private void OnAddToList(Advisor advisor)
+    {
+        var lists = _listRepo.GetAllLists();
+        using var dlg = new AddToListDialog(lists, advisor.FullName);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        AdvisorList targetList;
+        if (dlg.CreatedNewList && dlg.NewListName != null)
+        {
+            targetList = _listRepo.CreateList(dlg.NewListName);
+        }
+        else if (dlg.SelectedList != null)
+        {
+            targetList = dlg.SelectedList;
+        }
+        else return;
+
+        bool added = _listRepo.AddToList(targetList.Id, advisor.Id);
+        SetStatus(added
+            ? $"{advisor.FullName} added to \"{targetList.Name}\"."
+            : $"{advisor.FullName} is already in \"{targetList.Name}\".");
     }
 
     private void SetStatus(string message)

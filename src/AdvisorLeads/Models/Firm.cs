@@ -17,6 +17,19 @@ public class Firm
     public int? NumberOfAdvisors { get; set; }
     public DateTime? RegistrationDate { get; set; }
     public string? Source { get; set; }
+    // "Investment Advisor" (SEC RIA) or "Broker-Dealer" (FINRA)
+    public string? RecordType { get; set; }
+    public string? SECNumber { get; set; }        // SECNb
+    public string? SECRegion { get; set; }        // SECRgnCD
+    public string? LegalName { get; set; }        // LegalNm
+    public string? FaxPhone { get; set; }         // FaxNb
+    public string? MailingAddress { get; set; }   // composite of MailingAddr attrs
+    public string? RegistrationStatus { get; set; } // Rgstn.St
+    public string? AumDescription { get; set; }  // Item1.Q1ODesc
+    public string? StateOfOrganization { get; set; } // Item3C.StateCD
+    public string? Country { get; set; }             // Main Office Country
+    public int? NumberOfEmployees { get; set; }      // 5A total employees
+    public string? LatestFilingDate { get; set; }    // Latest ADV Filing Date
     public bool IsExcluded { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
