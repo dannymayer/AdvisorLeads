@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using AdvisorLeads.Models;
 using System.Text;
 
@@ -17,215 +17,131 @@ public class AdvisorRepository
 
     public List<Advisor> GetAdvisors(SearchFilter filter)
     {
-        var conn = _context.GetConnection();
-        var sb = new StringBuilder(@"
-            SELECT Id, CrdNumber, IapdNumber, FirstName, LastName, MiddleName,
-                   Title, Email, Phone, City, State, ZipCode, Licenses, Qualifications,
-                   CurrentFirmName, CurrentFirmCrd, CurrentFirmId, RegistrationStatus,
-                   RegistrationDate, YearsOfExperience, HasDisclosures, DisclosureCount,
-                   Source, IsExcluded, ExclusionReason, IsImportedToCrm, CrmId,
-                   CreatedAt, UpdatedAt, RecordType, Suffix, IapdLink, RegAuthorities, DisclosureFlags, OtherNames,
-                   IsFavorited
-            FROM Advisors WHERE 1=1");
-
-        var parameters = new List<(string name, object value)>();
+        IQueryable<Advisor> query = _context.Advisors.AsNoTracking();
 
         if (!filter.IncludeExcluded)
-        {
-            sb.Append(" AND IsExcluded = 0");
-        }
+            query = query.Where(a => !a.IsExcluded);
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
         {
-            sb.Append(" AND (FirstName LIKE @name OR LastName LIKE @name OR (FirstName || ' ' || LastName) LIKE @name)");
-            parameters.Add(("@name", $"%{filter.NameQuery}%"));
+            var pattern = $"%{filter.NameQuery}%";
+            query = query.Where(a =>
+                EF.Functions.Like(a.FirstName, pattern) ||
+                EF.Functions.Like(a.LastName, pattern));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.State))
-        {
-            sb.Append(" AND State = @state");
-            parameters.Add(("@state", filter.State));
-        }
+            query = query.Where(a => a.State == filter.State);
 
         if (!string.IsNullOrWhiteSpace(filter.FirmName))
         {
-            sb.Append(" AND CurrentFirmName LIKE @firmName");
-            parameters.Add(("@firmName", $"%{filter.FirmName}%"));
+            var pattern = $"%{filter.FirmName}%";
+            query = query.Where(a => EF.Functions.Like(a.CurrentFirmName!, pattern));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.FirmCrd))
-        {
-            sb.Append(" AND CurrentFirmCrd = @firmCrd");
-            parameters.Add(("@firmCrd", filter.FirmCrd));
-        }
+            query = query.Where(a => a.CurrentFirmCrd == filter.FirmCrd);
 
         if (!string.IsNullOrWhiteSpace(filter.CrdNumber))
-        {
-            sb.Append(" AND CrdNumber = @crd");
-            parameters.Add(("@crd", filter.CrdNumber));
-        }
+            query = query.Where(a => a.CrdNumber == filter.CrdNumber);
 
         if (!string.IsNullOrWhiteSpace(filter.RegistrationStatus))
-        {
-            // Use LIKE so "Active" matches "Active", "Inactive" etc. correctly
-            sb.Append(" AND RegistrationStatus LIKE @status");
-            parameters.Add(("@status", filter.RegistrationStatus));
-        }
+            query = query.Where(a => EF.Functions.Like(a.RegistrationStatus!, filter.RegistrationStatus));
 
         if (!string.IsNullOrWhiteSpace(filter.LicenseType))
         {
-            sb.Append(" AND Licenses LIKE @license");
-            parameters.Add(("@license", $"%{filter.LicenseType}%"));
+            var pattern = $"%{filter.LicenseType}%";
+            query = query.Where(a => EF.Functions.Like(a.Licenses!, pattern));
         }
 
         if (filter.HasDisclosures.HasValue)
-        {
-            sb.Append(" AND HasDisclosures = @hasDisc");
-            parameters.Add(("@hasDisc", filter.HasDisclosures.Value ? 1 : 0));
-        }
+            query = query.Where(a => a.HasDisclosures == filter.HasDisclosures.Value);
 
         if (filter.IsImportedToCrm.HasValue)
-        {
-            sb.Append(" AND IsImportedToCrm = @imported");
-            parameters.Add(("@imported", filter.IsImportedToCrm.Value ? 1 : 0));
-        }
+            query = query.Where(a => a.IsImportedToCrm == filter.IsImportedToCrm.Value);
 
         if (!string.IsNullOrWhiteSpace(filter.Source))
         {
-            // "Both" means the record appears in both FINRA and SEC — order may vary
             if (filter.Source.Equals("Both", StringComparison.OrdinalIgnoreCase)
                 || filter.Source.Contains(','))
             {
-                sb.Append(" AND Source LIKE '%FINRA%' AND Source LIKE '%SEC%'");
+                query = query.Where(a => a.Source != null && a.Source.Contains("FINRA") && a.Source.Contains("SEC"));
             }
             else
             {
-                sb.Append(" AND Source LIKE @source");
-                parameters.Add(("@source", $"%{filter.Source}%"));
+                var pattern = $"%{filter.Source}%";
+                query = query.Where(a => EF.Functions.Like(a.Source!, pattern));
             }
         }
 
         if (!string.IsNullOrWhiteSpace(filter.RecordType))
-        {
-            sb.Append(" AND RecordType = @recordType");
-            parameters.Add(("@recordType", filter.RecordType));
-        }
+            query = query.Where(a => a.RecordType == filter.RecordType);
 
         if (filter.MinYearsExperience.HasValue)
-        {
-            sb.Append(" AND YearsOfExperience >= @minYears");
-            parameters.Add(("@minYears", filter.MinYearsExperience.Value));
-        }
+            query = query.Where(a => a.YearsOfExperience >= filter.MinYearsExperience.Value);
 
         if (filter.MaxYearsExperience.HasValue)
-        {
-            sb.Append(" AND YearsOfExperience <= @maxYears");
-            parameters.Add(("@maxYears", filter.MaxYearsExperience.Value));
-        }
+            query = query.Where(a => a.YearsOfExperience <= filter.MaxYearsExperience.Value);
 
         if (!string.IsNullOrWhiteSpace(filter.City))
         {
-            sb.Append(" AND City LIKE @city");
-            parameters.Add(("@city", $"%{filter.City}%"));
+            var pattern = $"%{filter.City}%";
+            query = query.Where(a => EF.Functions.Like(a.City!, pattern));
         }
 
         if (filter.MinDisclosureCount.HasValue && filter.MinDisclosureCount.Value > 0)
-        {
-            sb.Append(" AND DisclosureCount >= @minDisc");
-            parameters.Add(("@minDisc", filter.MinDisclosureCount.Value));
-        }
+            query = query.Where(a => a.DisclosureCount >= filter.MinDisclosureCount.Value);
 
         if (filter.ShowFavoritesOnly)
-        {
-            sb.Append(" AND IsFavorited = 1");
-        }
+            query = query.Where(a => a.IsFavorited);
 
-        var sortCol = filter.SortBy switch
+        IOrderedQueryable<Advisor> ordered = filter.SortBy switch
         {
-            "FirstName" => "FirstName",
-            "State" => "State",
-            "CurrentFirmName" => "CurrentFirmName",
-            "RegistrationStatus" => "RegistrationStatus",
-            "RecordType" => "RecordType",
-            "YearsOfExperience" => "YearsOfExperience",
-            "UpdatedAt" => "UpdatedAt",
-            _ => "LastName"
+            "FirstName" => filter.SortDescending ? query.OrderByDescending(a => a.FirstName) : query.OrderBy(a => a.FirstName),
+            "State" => filter.SortDescending ? query.OrderByDescending(a => a.State) : query.OrderBy(a => a.State),
+            "CurrentFirmName" => filter.SortDescending ? query.OrderByDescending(a => a.CurrentFirmName) : query.OrderBy(a => a.CurrentFirmName),
+            "RegistrationStatus" => filter.SortDescending ? query.OrderByDescending(a => a.RegistrationStatus) : query.OrderBy(a => a.RegistrationStatus),
+            "RecordType" => filter.SortDescending ? query.OrderByDescending(a => a.RecordType) : query.OrderBy(a => a.RecordType),
+            "YearsOfExperience" => filter.SortDescending ? query.OrderByDescending(a => a.YearsOfExperience) : query.OrderBy(a => a.YearsOfExperience),
+            "UpdatedAt" => filter.SortDescending ? query.OrderByDescending(a => a.UpdatedAt) : query.OrderBy(a => a.UpdatedAt),
+            _ => filter.SortDescending ? query.OrderByDescending(a => a.LastName) : query.OrderBy(a => a.LastName),
         };
-        sb.Append($" ORDER BY {sortCol} {(filter.SortDescending ? "DESC" : "ASC")}");
-        sb.Append(" LIMIT @pageSize OFFSET @offset");
-        parameters.Add(("@pageSize", filter.PageSize));
-        parameters.Add(("@offset", (filter.PageNumber - 1) * filter.PageSize));
 
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = sb.ToString();
-        foreach (var (name, value) in parameters)
-            cmd.Parameters.AddWithValue(name, value);
-
-        var advisors = new List<Advisor>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-            advisors.Add(MapAdvisor(reader));
-
-        return advisors;
+        return ordered
+            .Skip((filter.PageNumber - 1) * filter.PageSize)
+            .Take(filter.PageSize)
+            .ToList();
     }
 
     public Advisor? GetAdvisorById(int id)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT Id, CrdNumber, IapdNumber, FirstName, LastName, MiddleName,
-                   Title, Email, Phone, City, State, ZipCode, Licenses, Qualifications,
-                   CurrentFirmName, CurrentFirmCrd, CurrentFirmId, RegistrationStatus,
-                   RegistrationDate, YearsOfExperience, HasDisclosures, DisclosureCount,
-                   Source, IsExcluded, ExclusionReason, IsImportedToCrm, CrmId,
-                   CreatedAt, UpdatedAt, RecordType, Suffix, IapdLink, RegAuthorities, DisclosureFlags, OtherNames,
-                   IsFavorited
-            FROM Advisors WHERE Id = @id";
-        cmd.Parameters.AddWithValue("@id", id);
-        using var reader = cmd.ExecuteReader();
-        if (reader.Read())
-        {
-            var advisor = MapAdvisor(reader);
-            reader.Close();
-            LoadRelatedData(advisor);
-            return advisor;
-        }
-        return null;
+        return _context.Advisors
+            .Include(a => a.EmploymentHistory)
+            .Include(a => a.Disclosures)
+            .Include(a => a.QualificationList)
+            .FirstOrDefault(a => a.Id == id);
     }
 
     public Advisor? GetAdvisorByCrd(string crd)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT Id FROM Advisors WHERE CrdNumber = @crd";
-        cmd.Parameters.AddWithValue("@crd", crd);
-        var id = cmd.ExecuteScalar();
-        if (id != null && id != DBNull.Value)
-            return GetAdvisorById(Convert.ToInt32(id));
-        return null;
+        var stub = _context.Advisors.AsNoTracking()
+            .Where(a => a.CrdNumber == crd)
+            .Select(a => new { a.Id })
+            .FirstOrDefault();
+        if (stub == null) return null;
+        return GetAdvisorById(stub.Id);
     }
 
     public int UpsertAdvisor(Advisor advisor)
     {
-        var conn = _context.GetConnection();
-
-        // Check for existing by CRD
-        int existingId = 0;
+        Advisor? existing = null;
         if (!string.IsNullOrEmpty(advisor.CrdNumber))
-        {
-            using var checkCmd = conn.CreateCommand();
-            checkCmd.CommandText = "SELECT Id FROM Advisors WHERE CrdNumber = @crd";
-            checkCmd.Parameters.AddWithValue("@crd", advisor.CrdNumber);
-            var result = checkCmd.ExecuteScalar();
-            if (result != null && result != DBNull.Value)
-                existingId = Convert.ToInt32(result);
-        }
+            existing = _context.Advisors.FirstOrDefault(a => a.CrdNumber == advisor.CrdNumber);
 
-        if (existingId > 0)
+        if (existing != null)
         {
-            advisor.Id = existingId;
-            UpdateAdvisor(advisor);
+            advisor.Id = existing.Id;
+            UpdateAdvisor(existing, advisor);
         }
         else
         {
@@ -245,223 +161,130 @@ public class AdvisorRepository
 
     private void InsertAdvisor(Advisor a)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO Advisors (CrdNumber, IapdNumber, FirstName, LastName, MiddleName,
-                Title, Email, Phone, City, State, ZipCode, Licenses, Qualifications,
-                CurrentFirmName, CurrentFirmCrd, CurrentFirmId, RegistrationStatus,
-                RegistrationDate, YearsOfExperience, HasDisclosures, DisclosureCount,
-                Source, RecordType, IsExcluded, ExclusionReason, IsImportedToCrm, CrmId,
-                Suffix, IapdLink, RegAuthorities, DisclosureFlags, OtherNames, UpdatedAt)
-            VALUES (@crd, @iapd, @first, @last, @middle, @title, @email, @phone,
-                @city, @state, @zip, @licenses, @quals, @firmName, @firmCrd, @firmId,
-                @status, @regDate, @years, @discs, @discCount, @source, @recordType,
-                0, NULL, 0, NULL, @suffix, @iapdLink, @regAuths, @discFlags, @otherNames, datetime('now'));
-            SELECT last_insert_rowid();";
-        BindAdvisorParams(cmd, a);
-        a.Id = Convert.ToInt32(cmd.ExecuteScalar());
+        a.IsExcluded = false;
+        a.IsImportedToCrm = false;
+        a.UpdatedAt = DateTime.UtcNow;
+        _context.Advisors.Add(a);
+        _context.SaveChanges();
     }
 
-    private void UpdateAdvisor(Advisor a)
+    private void UpdateAdvisor(Advisor existing, Advisor incoming)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            UPDATE Advisors SET
-                IapdNumber          = COALESCE(NULLIF(@iapd, ''), IapdNumber),
-                FirstName           = @first,
-                LastName            = @last,
-                MiddleName          = COALESCE(@middle, MiddleName),
-                Title               = COALESCE(@title, Title),
-                Email               = COALESCE(@email, Email),
-                Phone               = COALESCE(@phone, Phone),
-                City                = COALESCE(NULLIF(@city, ''), City),
-                State               = COALESCE(NULLIF(@state, ''), State),
-                ZipCode             = COALESCE(NULLIF(@zip, ''), ZipCode),
-                Licenses            = COALESCE(NULLIF(@licenses, ''), Licenses),
-                Qualifications      = COALESCE(NULLIF(@quals, ''), Qualifications),
-                CurrentFirmName     = COALESCE(NULLIF(@firmName, ''), CurrentFirmName),
-                CurrentFirmCrd      = COALESCE(NULLIF(@firmCrd, ''), CurrentFirmCrd),
-                CurrentFirmId       = COALESCE(@firmId, CurrentFirmId),
-                RegistrationStatus  = COALESCE(NULLIF(@status, ''), RegistrationStatus),
-                RegistrationDate    = COALESCE(NULLIF(@regDate, ''), RegistrationDate),
-                YearsOfExperience   = COALESCE(@years, YearsOfExperience),
-                HasDisclosures      = MAX(HasDisclosures, @discs),
-                DisclosureCount     = MAX(DisclosureCount, @discCount),
-                Source              = CASE
-                    WHEN @source IS NULL OR @source = '' THEN Source
-                    WHEN Source IS NULL OR Source = '' THEN @source
-                    WHEN ',' || Source || ',' LIKE '%,' || @source || ',%' THEN Source
-                    ELSE Source || ',' || @source
-                  END,
-                RecordType          = COALESCE(NULLIF(@recordType, ''), RecordType),
-                Suffix              = COALESCE(@suffix, Suffix),
-                IapdLink            = COALESCE(@iapdLink, IapdLink),
-                RegAuthorities      = COALESCE(NULLIF(@regAuths, ''), RegAuthorities),
-                DisclosureFlags     = COALESCE(NULLIF(@discFlags, ''), DisclosureFlags),
-                OtherNames          = COALESCE(NULLIF(@otherNames, ''), OtherNames),
-                UpdatedAt           = datetime('now')
-            WHERE Id = @id";
-        BindAdvisorParams(cmd, a);
-        cmd.Parameters.AddWithValue("@id", a.Id);
-        cmd.ExecuteNonQuery();
-    }
+        // COALESCE logic: only overwrite if incoming value is non-null/non-empty
+        if (!string.IsNullOrEmpty(incoming.IapdNumber))
+            existing.IapdNumber = incoming.IapdNumber;
 
-    private static void BindAdvisorParams(SqliteCommand cmd, Advisor a)
-    {
-        cmd.Parameters.AddWithValue("@crd", (object?)a.CrdNumber ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@iapd", (object?)a.IapdNumber ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@first", a.FirstName);
-        cmd.Parameters.AddWithValue("@last", a.LastName);
-        cmd.Parameters.AddWithValue("@middle", (object?)a.MiddleName ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@title", (object?)a.Title ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@email", (object?)a.Email ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@phone", (object?)a.Phone ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@city", (object?)a.City ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@state", (object?)a.State ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@zip", (object?)a.ZipCode ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@licenses", (object?)a.Licenses ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@quals", (object?)a.Qualifications ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@firmName", (object?)a.CurrentFirmName ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@firmCrd", (object?)a.CurrentFirmCrd ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@firmId", (object?)a.CurrentFirmId ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@status", (object?)a.RegistrationStatus ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@regDate", a.RegistrationDate.HasValue ? a.RegistrationDate.Value.ToString("yyyy-MM-dd") : (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@years", (object?)a.YearsOfExperience ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@discs", a.HasDisclosures ? 1 : 0);
-        cmd.Parameters.AddWithValue("@discCount", a.DisclosureCount);
-        cmd.Parameters.AddWithValue("@source", (object?)a.Source ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@recordType", (object?)a.RecordType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@suffix", (object?)a.Suffix ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@iapdLink", (object?)a.IapdLink ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@regAuths", (object?)a.RegAuthorities ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@discFlags", (object?)a.DisclosureFlags ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@otherNames", (object?)a.OtherNames ?? DBNull.Value);
+        existing.FirstName = incoming.FirstName;
+        existing.LastName = incoming.LastName;
+
+        if (incoming.MiddleName != null)
+            existing.MiddleName = incoming.MiddleName;
+        if (incoming.Title != null)
+            existing.Title = incoming.Title;
+        if (incoming.Email != null)
+            existing.Email = incoming.Email;
+        if (incoming.Phone != null)
+            existing.Phone = incoming.Phone;
+        if (!string.IsNullOrEmpty(incoming.City))
+            existing.City = incoming.City;
+        if (!string.IsNullOrEmpty(incoming.State))
+            existing.State = incoming.State;
+        if (!string.IsNullOrEmpty(incoming.ZipCode))
+            existing.ZipCode = incoming.ZipCode;
+        if (!string.IsNullOrEmpty(incoming.Licenses))
+            existing.Licenses = incoming.Licenses;
+        if (!string.IsNullOrEmpty(incoming.Qualifications))
+            existing.Qualifications = incoming.Qualifications;
+        if (!string.IsNullOrEmpty(incoming.CurrentFirmName))
+            existing.CurrentFirmName = incoming.CurrentFirmName;
+        if (!string.IsNullOrEmpty(incoming.CurrentFirmCrd))
+            existing.CurrentFirmCrd = incoming.CurrentFirmCrd;
+        if (incoming.CurrentFirmId != null)
+            existing.CurrentFirmId = incoming.CurrentFirmId;
+        if (!string.IsNullOrEmpty(incoming.RegistrationStatus))
+            existing.RegistrationStatus = incoming.RegistrationStatus;
+        if (incoming.RegistrationDate.HasValue)
+            existing.RegistrationDate = incoming.RegistrationDate;
+        if (incoming.YearsOfExperience != null)
+            existing.YearsOfExperience = incoming.YearsOfExperience;
+
+        // HasDisclosures / DisclosureCount: use Math.Max
+        existing.HasDisclosures = existing.HasDisclosures || incoming.HasDisclosures;
+        existing.DisclosureCount = Math.Max(existing.DisclosureCount, incoming.DisclosureCount);
+
+        // Source: append if not already present
+        if (!string.IsNullOrEmpty(incoming.Source))
+        {
+            if (string.IsNullOrEmpty(existing.Source))
+            {
+                existing.Source = incoming.Source;
+            }
+            else if (!("," + existing.Source + ",").Contains("," + incoming.Source + ","))
+            {
+                existing.Source = existing.Source + "," + incoming.Source;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(incoming.RecordType))
+            existing.RecordType = incoming.RecordType;
+        if (incoming.Suffix != null)
+            existing.Suffix = incoming.Suffix;
+        if (incoming.IapdLink != null)
+            existing.IapdLink = incoming.IapdLink;
+        if (!string.IsNullOrEmpty(incoming.RegAuthorities))
+            existing.RegAuthorities = incoming.RegAuthorities;
+        if (!string.IsNullOrEmpty(incoming.DisclosureFlags))
+            existing.DisclosureFlags = incoming.DisclosureFlags;
+        if (!string.IsNullOrEmpty(incoming.OtherNames))
+            existing.OtherNames = incoming.OtherNames;
+
+        existing.UpdatedAt = DateTime.UtcNow;
+        _context.SaveChanges();
     }
 
     public void SetAdvisorExcluded(int id, bool excluded, string? reason = null)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE Advisors SET IsExcluded = @excluded, ExclusionReason = @reason, UpdatedAt = datetime('now') WHERE Id = @id";
-        cmd.Parameters.AddWithValue("@excluded", excluded ? 1 : 0);
-        cmd.Parameters.AddWithValue("@reason", (object?)reason ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.ExecuteNonQuery();
+        _context.Advisors
+            .Where(a => a.Id == id)
+            .ExecuteUpdate(s => s
+                .SetProperty(a => a.IsExcluded, excluded)
+                .SetProperty(a => a.ExclusionReason, reason)
+                .SetProperty(a => a.UpdatedAt, DateTime.UtcNow));
     }
 
     public void SetAdvisorImported(int id, string? crmId)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE Advisors SET IsImportedToCrm = 1, CrmId = @crmId, UpdatedAt = datetime('now') WHERE Id = @id";
-        cmd.Parameters.AddWithValue("@crmId", (object?)crmId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.ExecuteNonQuery();
+        _context.Advisors
+            .Where(a => a.Id == id)
+            .ExecuteUpdate(s => s
+                .SetProperty(a => a.IsImportedToCrm, true)
+                .SetProperty(a => a.CrmId, crmId)
+                .SetProperty(a => a.UpdatedAt, DateTime.UtcNow));
     }
 
     public void SetAdvisorFavorited(int id, bool favorited)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE Advisors SET IsFavorited = @favorited WHERE Id = @id";
-        cmd.Parameters.AddWithValue("@favorited", favorited ? 1 : 0);
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.ExecuteNonQuery();
-    }
-
-    private void LoadRelatedData(Advisor advisor)
-    {
-        var conn = _context.GetConnection();
-
-        using var empCmd = conn.CreateCommand();
-        empCmd.CommandText = "SELECT Id, AdvisorId, FirmName, FirmCrd, StartDate, EndDate, Position, Street FROM EmploymentHistory WHERE AdvisorId = @id ORDER BY StartDate DESC";
-        empCmd.Parameters.AddWithValue("@id", advisor.Id);
-        using (var r = empCmd.ExecuteReader())
-        {
-            while (r.Read())
-            {
-                advisor.EmploymentHistory.Add(new EmploymentHistory
-                {
-                    Id = r.GetInt32(0),
-                    AdvisorId = r.GetInt32(1),
-                    FirmName = r.GetString(2),
-                    FirmCrd = r.IsDBNull(3) ? null : r.GetString(3),
-                    StartDate = r.IsDBNull(4) ? null : DateTime.Parse(r.GetString(4)),
-                    EndDate = r.IsDBNull(5) ? null : DateTime.Parse(r.GetString(5)),
-                    Position = r.IsDBNull(6) ? null : r.GetString(6),
-                    Street = r.FieldCount > 7 && !r.IsDBNull(7) ? r.GetString(7) : null
-                });
-            }
-        }
-
-        using var discCmd = conn.CreateCommand();
-        discCmd.CommandText = "SELECT Id, AdvisorId, Type, Description, Date, Resolution, Sanctions, Source FROM Disclosures WHERE AdvisorId = @id";
-        discCmd.Parameters.AddWithValue("@id", advisor.Id);
-        using (var r = discCmd.ExecuteReader())
-        {
-            while (r.Read())
-            {
-                advisor.Disclosures.Add(new Disclosure
-                {
-                    Id = r.GetInt32(0),
-                    AdvisorId = r.GetInt32(1),
-                    Type = r.GetString(2),
-                    Description = r.IsDBNull(3) ? null : r.GetString(3),
-                    Date = r.IsDBNull(4) ? null : DateTime.Parse(r.GetString(4)),
-                    Resolution = r.IsDBNull(5) ? null : r.GetString(5),
-                    Sanctions = r.IsDBNull(6) ? null : r.GetString(6),
-                    Source = r.IsDBNull(7) ? null : r.GetString(7)
-                });
-            }
-        }
-
-        using var qualCmd = conn.CreateCommand();
-        qualCmd.CommandText = "SELECT Id, AdvisorId, Name, Code, Date, Status FROM Qualifications WHERE AdvisorId = @id";
-        qualCmd.Parameters.AddWithValue("@id", advisor.Id);
-        using (var r = qualCmd.ExecuteReader())
-        {
-            while (r.Read())
-            {
-                advisor.QualificationList.Add(new Qualification
-                {
-                    Id = r.GetInt32(0),
-                    AdvisorId = r.GetInt32(1),
-                    Name = r.GetString(2),
-                    Code = r.IsDBNull(3) ? null : r.GetString(3),
-                    Date = r.IsDBNull(4) ? null : DateTime.Parse(r.GetString(4)),
-                    Status = r.IsDBNull(5) ? null : r.GetString(5)
-                });
-            }
-        }
+        _context.Advisors
+            .Where(a => a.Id == id)
+            .ExecuteUpdate(s => s
+                .SetProperty(a => a.IsFavorited, favorited));
     }
 
     private void UpsertEmploymentHistory(int advisorId, List<EmploymentHistory> history)
     {
-        var conn = _context.GetConnection();
-
-        // Load existing records so we can merge rather than replace
-        var existing = new List<(int id, string firmName)>();
-        using (var selCmd = conn.CreateCommand())
-        {
-            selCmd.CommandText = "SELECT Id, FirmName FROM EmploymentHistory WHERE AdvisorId = @id";
-            selCmd.Parameters.AddWithValue("@id", advisorId);
-            using var r = selCmd.ExecuteReader();
-            while (r.Read())
-                existing.Add((r.GetInt32(0), r.GetString(1)));
-        }
+        var existing = _context.EmploymentHistory
+            .Where(e => e.AdvisorId == advisorId)
+            .ToList();
 
         foreach (var h in history)
         {
             if (string.IsNullOrWhiteSpace(h.FirmName)) continue;
 
             var match = existing.FirstOrDefault(e =>
-                string.Equals(e.firmName, h.FirmName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(e.FirmName, h.FirmName, StringComparison.OrdinalIgnoreCase));
 
-            if (match.id > 0)
+            if (match != null)
             {
-                // Update only if incoming record has richer date/position data
                 bool hasNewStart = h.StartDate.HasValue;
                 bool hasNewEnd = h.EndDate.HasValue && h.EndDate.Value != DateTime.MinValue;
                 bool hasNewPos = !string.IsNullOrWhiteSpace(h.Position);
@@ -469,115 +292,65 @@ public class AdvisorRepository
 
                 if (hasNewStart || hasNewEnd || hasNewPos || hasNewCrd)
                 {
-                    using var updCmd = conn.CreateCommand();
-                    updCmd.CommandText = @"
-                        UPDATE EmploymentHistory SET
-                            StartDate = CASE WHEN @start IS NOT NULL THEN @start ELSE StartDate END,
-                            EndDate   = CASE WHEN @end   IS NOT NULL THEN @end   ELSE EndDate   END,
-                            Position  = COALESCE(@pos, Position),
-                            FirmCrd   = COALESCE(@crd, FirmCrd),
-                            Street    = COALESCE(@street, Street)
-                        WHERE Id = @id";
-                    updCmd.Parameters.AddWithValue("@start", hasNewStart
-                        ? h.StartDate!.Value.ToString("yyyy-MM-dd")
-                        : (object)DBNull.Value);
-                    updCmd.Parameters.AddWithValue("@end", hasNewEnd
-                        ? h.EndDate!.Value.ToString("yyyy-MM-dd")
-                        : (object)DBNull.Value);
-                    updCmd.Parameters.AddWithValue("@pos", hasNewPos ? (object)h.Position! : DBNull.Value);
-                    updCmd.Parameters.AddWithValue("@crd", hasNewCrd ? (object)h.FirmCrd! : DBNull.Value);
-                    updCmd.Parameters.AddWithValue("@street", !string.IsNullOrWhiteSpace(h.Street) ? (object)h.Street! : DBNull.Value);
-                    updCmd.Parameters.AddWithValue("@id", match.id);
-                    updCmd.ExecuteNonQuery();
+                    if (hasNewStart) match.StartDate = h.StartDate;
+                    if (hasNewEnd) match.EndDate = h.EndDate;
+                    if (hasNewPos) match.Position = h.Position;
+                    if (hasNewCrd) match.FirmCrd = h.FirmCrd;
+                    if (!string.IsNullOrWhiteSpace(h.Street)) match.Street = h.Street;
                 }
             }
             else
             {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT INTO EmploymentHistory (AdvisorId, FirmName, FirmCrd, StartDate, EndDate, Position, Street)
-                    VALUES (@aid, @firm, @crd, @start, @end, @pos, @street)";
-                cmd.Parameters.AddWithValue("@aid", advisorId);
-                cmd.Parameters.AddWithValue("@firm", h.FirmName);
-                cmd.Parameters.AddWithValue("@crd", (object?)h.FirmCrd ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@start", h.StartDate.HasValue
-                    ? h.StartDate.Value.ToString("yyyy-MM-dd")
-                    : (object)DBNull.Value);
-                cmd.Parameters.AddWithValue("@end", (h.EndDate.HasValue && h.EndDate.Value != DateTime.MinValue)
-                    ? h.EndDate.Value.ToString("yyyy-MM-dd")
-                    : (object)DBNull.Value);
-                cmd.Parameters.AddWithValue("@pos", (object?)h.Position ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@street", (object?)h.Street ?? DBNull.Value);
-                cmd.ExecuteNonQuery();
-                existing.Add((0, h.FirmName)); // prevent double-insert within same batch
+                var entry = new EmploymentHistory
+                {
+                    AdvisorId = advisorId,
+                    FirmName = h.FirmName,
+                    FirmCrd = h.FirmCrd,
+                    StartDate = h.StartDate,
+                    EndDate = (h.EndDate.HasValue && h.EndDate.Value != DateTime.MinValue) ? h.EndDate : null,
+                    Position = h.Position,
+                    Street = h.Street
+                };
+                _context.EmploymentHistory.Add(entry);
+                existing.Add(entry); // prevent double-insert within same batch
             }
         }
+
+        _context.SaveChanges();
     }
 
     private void UpsertDisclosures(int advisorId, List<Disclosure> disclosures)
     {
-        var conn = _context.GetConnection();
-        using var delCmd = conn.CreateCommand();
-        delCmd.CommandText = "DELETE FROM Disclosures WHERE AdvisorId = @id";
-        delCmd.Parameters.AddWithValue("@id", advisorId);
-        delCmd.ExecuteNonQuery();
+        _context.Disclosures.Where(d => d.AdvisorId == advisorId).ExecuteDelete();
 
         foreach (var d in disclosures)
-        {
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO Disclosures (AdvisorId, Type, Description, Date, Resolution, Sanctions, Source)
-                VALUES (@aid, @type, @desc, @date, @res, @sanc, @src)";
-            cmd.Parameters.AddWithValue("@aid", advisorId);
-            cmd.Parameters.AddWithValue("@type", d.Type);
-            cmd.Parameters.AddWithValue("@desc", (object?)d.Description ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@date", d.Date.HasValue ? d.Date.Value.ToString("yyyy-MM-dd") : (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("@res", (object?)d.Resolution ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@sanc", (object?)d.Sanctions ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@src", (object?)d.Source ?? DBNull.Value);
-            cmd.ExecuteNonQuery();
-        }
+            d.AdvisorId = advisorId;
+
+        _context.Disclosures.AddRange(disclosures);
+        _context.SaveChanges();
     }
 
     private void UpsertQualifications(int advisorId, List<Qualification> qualifications)
     {
-        var conn = _context.GetConnection();
-        using var delCmd = conn.CreateCommand();
-        delCmd.CommandText = "DELETE FROM Qualifications WHERE AdvisorId = @id";
-        delCmd.Parameters.AddWithValue("@id", advisorId);
-        delCmd.ExecuteNonQuery();
+        _context.Qualifications.Where(q => q.AdvisorId == advisorId).ExecuteDelete();
 
         foreach (var q in qualifications)
-        {
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO Qualifications (AdvisorId, Name, Code, Date, Status)
-                VALUES (@aid, @name, @code, @date, @status)";
-            cmd.Parameters.AddWithValue("@aid", advisorId);
-            cmd.Parameters.AddWithValue("@name", q.Name);
-            cmd.Parameters.AddWithValue("@code", (object?)q.Code ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@date", q.Date.HasValue ? q.Date.Value.ToString("yyyy-MM-dd") : (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("@status", (object?)q.Status ?? DBNull.Value);
-            cmd.ExecuteNonQuery();
-        }
+            q.AdvisorId = advisorId;
+
+        _context.Qualifications.AddRange(qualifications);
+        _context.SaveChanges();
     }
 
     public List<string> GetCrdsNeedingEnrichment(int limit)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT a.CrdNumber FROM Advisors a
-            WHERE a.CrdNumber IS NOT NULL
-            AND a.RegistrationStatus = 'Active'
-            AND NOT EXISTS (SELECT 1 FROM Qualifications q WHERE q.AdvisorId = a.Id)
-            ORDER BY a.UpdatedAt ASC
-            LIMIT @limit";
-        cmd.Parameters.AddWithValue("@limit", limit);
-        var result = new List<string>();
-        using var r = cmd.ExecuteReader();
-        while (r.Read()) result.Add(r.GetString(0));
-        return result;
+        return _context.Advisors.AsNoTracking()
+            .Where(a => a.CrdNumber != null
+                && a.RegistrationStatus == "Active"
+                && !a.QualificationList.Any())
+            .OrderBy(a => a.UpdatedAt)
+            .Take(limit)
+            .Select(a => a.CrdNumber!)
+            .ToList();
     }
 
     /// <summary>
@@ -587,33 +360,16 @@ public class AdvisorRepository
     /// </summary>
     public List<string> GetCrdsNeedingIapdEnrichment(int limit = 200)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        // Prioritize advisors with no qualifications AND no employment history
-        // (meaning FINRA detail fetch didn't work — IAPD enrichment is warranted).
-        // SEC-sourced records are prioritized first.
-        cmd.CommandText = @"
-            SELECT a.CrdNumber
-            FROM Advisors a
-            WHERE a.CrdNumber IS NOT NULL
-              AND a.IsExcluded = 0
-              AND NOT EXISTS (
-                  SELECT 1 FROM Qualifications q WHERE q.AdvisorId = a.Id
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM EmploymentHistory e WHERE e.AdvisorId = a.Id
-              )
-            ORDER BY
-                CASE WHEN a.Source LIKE '%SEC%' THEN 0 ELSE 1 END,
-                a.UpdatedAt ASC
-            LIMIT @limit";
-        cmd.Parameters.AddWithValue("@limit", limit);
-
-        var crds = new List<string>();
-        using var r = cmd.ExecuteReader();
-        while (r.Read())
-            crds.Add(r.GetString(0));
-        return crds;
+        return _context.Advisors.AsNoTracking()
+            .Where(a => a.CrdNumber != null
+                && !a.IsExcluded
+                && !a.QualificationList.Any()
+                && !a.EmploymentHistory.Any())
+            .OrderBy(a => a.Source != null && a.Source.Contains("SEC") ? 0 : 1)
+            .ThenBy(a => a.UpdatedAt)
+            .Take(limit)
+            .Select(a => a.CrdNumber!)
+            .ToList();
     }
 
     // ── Firms ─────────────────────────────────────────────────────────────
@@ -622,166 +378,89 @@ public class AdvisorRepository
     {
         filter ??= new FirmSearchFilter();
 
-        var conn = _context.GetConnection();
-        var sb = new StringBuilder(@"
-            SELECT Id, CrdNumber, Name, Address, City, State, ZipCode, Phone, Website,
-                   BusinessType, IsRegisteredWithSec, IsRegisteredWithFinra, NumberOfAdvisors,
-                   RegistrationDate, Source, IsExcluded, CreatedAt, UpdatedAt, RecordType,
-                   SECNumber, SECRegion, LegalName, FaxPhone, MailingAddress, RegistrationStatus,
-                   AumDescription, StateOfOrganization, Country, NumberOfEmployees, LatestFilingDate,
-                   RegulatoryAum, RegulatoryAumNonDiscretionary, NumClients,
-                   BrokerProtocolMember, BrokerProtocolUpdatedAt
-            FROM Firms WHERE IsExcluded = 0");
-
-        var parameters = new List<(string name, object value)>();
+        IQueryable<Firm> query = _context.Firms.AsNoTracking()
+            .Where(f => !f.IsExcluded);
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
         {
-            sb.Append(" AND Name LIKE @name");
-            parameters.Add(("@name", $"%{filter.NameQuery}%"));
+            var pattern = $"%{filter.NameQuery}%";
+            query = query.Where(f => EF.Functions.Like(f.Name, pattern));
         }
         if (!string.IsNullOrWhiteSpace(filter.State))
-        {
-            sb.Append(" AND State = @state");
-            parameters.Add(("@state", filter.State));
-        }
+            query = query.Where(f => f.State == filter.State);
         if (!string.IsNullOrWhiteSpace(filter.RecordType))
-        {
-            sb.Append(" AND RecordType = @recordType");
-            parameters.Add(("@recordType", filter.RecordType));
-        }
+            query = query.Where(f => f.RecordType == filter.RecordType);
         if (!string.IsNullOrWhiteSpace(filter.RegistrationStatus))
         {
-            sb.Append(" AND RegistrationStatus LIKE @status");
-            parameters.Add(("@status", $"%{filter.RegistrationStatus}%"));
+            var pattern = $"%{filter.RegistrationStatus}%";
+            query = query.Where(f => EF.Functions.Like(f.RegistrationStatus!, pattern));
         }
         if (filter.MinAdvisors.HasValue && filter.MinAdvisors.Value > 0)
-        {
-            sb.Append(" AND NumberOfAdvisors >= @minAdv");
-            parameters.Add(("@minAdv", filter.MinAdvisors.Value));
-        }
+            query = query.Where(f => f.NumberOfAdvisors >= filter.MinAdvisors.Value);
         if (filter.BrokerProtocolOnly)
-        {
-            sb.Append(" AND BrokerProtocolMember = 1");
-        }
+            query = query.Where(f => f.BrokerProtocolMember);
         if (filter.MinRegulatoryAum.HasValue)
-        {
-            sb.Append(" AND RegulatoryAum >= @minAum");
-            parameters.Add(("@minAum", (double)filter.MinRegulatoryAum.Value));
-        }
+            query = query.Where(f => f.RegulatoryAum >= filter.MinRegulatoryAum.Value);
 
-        var sortCol = filter.SortBy switch
+        IOrderedQueryable<Firm> ordered = filter.SortBy switch
         {
-            "State" => "State",
-            "NumberOfAdvisors" => "NumberOfAdvisors",
-            "RegistrationDate" => "RegistrationDate",
-            "UpdatedAt" => "UpdatedAt",
-            _ => "Name"
+            "State" => filter.SortDescending ? query.OrderByDescending(f => f.State) : query.OrderBy(f => f.State),
+            "NumberOfAdvisors" => filter.SortDescending ? query.OrderByDescending(f => f.NumberOfAdvisors) : query.OrderBy(f => f.NumberOfAdvisors),
+            "RegistrationDate" => filter.SortDescending ? query.OrderByDescending(f => f.RegistrationDate) : query.OrderBy(f => f.RegistrationDate),
+            "UpdatedAt" => filter.SortDescending ? query.OrderByDescending(f => f.UpdatedAt) : query.OrderBy(f => f.UpdatedAt),
+            _ => filter.SortDescending ? query.OrderByDescending(f => f.Name) : query.OrderBy(f => f.Name),
         };
-        sb.Append($" ORDER BY {sortCol} {(filter.SortDescending ? "DESC" : "ASC")}");
 
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = sb.ToString();
-        foreach (var (name, value) in parameters)
-            cmd.Parameters.AddWithValue(name, value);
-
-        var firms = new List<Firm>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-            firms.Add(MapFirm(reader));
-        return firms;
+        return ordered.ToList();
     }
 
     public int UpsertFirm(Firm firm)
     {
-        var conn = _context.GetConnection();
-
-        int existingId = 0;
+        Firm? existing = null;
         if (!string.IsNullOrEmpty(firm.CrdNumber))
-        {
-            using var checkCmd = conn.CreateCommand();
-            checkCmd.CommandText = "SELECT Id FROM Firms WHERE CrdNumber = @crd";
-            checkCmd.Parameters.AddWithValue("@crd", firm.CrdNumber);
-            var result = checkCmd.ExecuteScalar();
-            if (result != null && result != DBNull.Value)
-                existingId = Convert.ToInt32(result);
-        }
+            existing = _context.Firms.FirstOrDefault(f => f.CrdNumber == firm.CrdNumber);
 
-        if (existingId > 0)
+        if (existing != null)
         {
-            firm.Id = existingId;
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-                UPDATE Firms SET Name=@name, Address=@addr, City=@city, State=@state, ZipCode=@zip,
-                    Phone=@phone, Website=@web, BusinessType=@btype, IsRegisteredWithSec=@sec,
-                    IsRegisteredWithFinra=@finra, NumberOfAdvisors=@numAdv, RegistrationDate=@regDate,
-                    Source=@source, RecordType=@recordType,
-                    SECNumber=@secNum, SECRegion=@secRgn, LegalName=@legalNm, FaxPhone=@faxPhone,
-                    MailingAddress=@mailAddr, RegistrationStatus=@regStatus,
-                    AumDescription=@aumDesc, StateOfOrganization=@stateOrg,
-                    RegulatoryAum=@regAum, RegulatoryAumNonDiscretionary=@regAumNd,
-                    NumClients=@numClients, BrokerProtocolMember=@bpMember,
-                    BrokerProtocolUpdatedAt=@bpUpdated,
-                    UpdatedAt=datetime('now')
-                WHERE Id = @id";
-            BindFirmParams(cmd, firm);
-            cmd.Parameters.AddWithValue("@id", firm.Id);
-            cmd.ExecuteNonQuery();
+            firm.Id = existing.Id;
+            existing.Name = firm.Name;
+            existing.Address = firm.Address;
+            existing.City = firm.City;
+            existing.State = firm.State;
+            existing.ZipCode = firm.ZipCode;
+            existing.Phone = firm.Phone;
+            existing.Website = firm.Website;
+            existing.BusinessType = firm.BusinessType;
+            existing.IsRegisteredWithSec = firm.IsRegisteredWithSec;
+            existing.IsRegisteredWithFinra = firm.IsRegisteredWithFinra;
+            existing.NumberOfAdvisors = firm.NumberOfAdvisors;
+            existing.RegistrationDate = firm.RegistrationDate;
+            existing.Source = firm.Source;
+            existing.RecordType = firm.RecordType;
+            existing.SECNumber = firm.SECNumber;
+            existing.SECRegion = firm.SECRegion;
+            existing.LegalName = firm.LegalName;
+            existing.FaxPhone = firm.FaxPhone;
+            existing.MailingAddress = firm.MailingAddress;
+            existing.RegistrationStatus = firm.RegistrationStatus;
+            existing.AumDescription = firm.AumDescription;
+            existing.StateOfOrganization = firm.StateOfOrganization;
+            existing.RegulatoryAum = firm.RegulatoryAum;
+            existing.RegulatoryAumNonDiscretionary = firm.RegulatoryAumNonDiscretionary;
+            existing.NumClients = firm.NumClients;
+            existing.BrokerProtocolMember = firm.BrokerProtocolMember;
+            existing.BrokerProtocolUpdatedAt = firm.BrokerProtocolUpdatedAt;
+            existing.UpdatedAt = DateTime.UtcNow;
+            _context.SaveChanges();
         }
         else
         {
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-                INSERT INTO Firms (CrdNumber, Name, Address, City, State, ZipCode, Phone, Website,
-                    BusinessType, IsRegisteredWithSec, IsRegisteredWithFinra, NumberOfAdvisors,
-                    RegistrationDate, Source, RecordType,
-                    SECNumber, SECRegion, LegalName, FaxPhone, MailingAddress,
-                    RegistrationStatus, AumDescription, StateOfOrganization,
-                    RegulatoryAum, RegulatoryAumNonDiscretionary, NumClients,
-                    BrokerProtocolMember, BrokerProtocolUpdatedAt, UpdatedAt)
-                VALUES (@crd, @name, @addr, @city, @state, @zip, @phone, @web,
-                    @btype, @sec, @finra, @numAdv, @regDate, @source, @recordType,
-                    @secNum, @secRgn, @legalNm, @faxPhone, @mailAddr,
-                    @regStatus, @aumDesc, @stateOrg,
-                    @regAum, @regAumNd, @numClients, @bpMember, @bpUpdated, datetime('now'));
-                SELECT last_insert_rowid();";
-            cmd.Parameters.AddWithValue("@crd", (object?)firm.CrdNumber ?? DBNull.Value);
-            BindFirmParams(cmd, firm);
-            firm.Id = Convert.ToInt32(cmd.ExecuteScalar());
+            firm.UpdatedAt = DateTime.UtcNow;
+            _context.Firms.Add(firm);
+            _context.SaveChanges();
         }
 
         return firm.Id;
-    }
-
-    private static void BindFirmParams(SqliteCommand cmd, Firm f)
-    {
-        cmd.Parameters.AddWithValue("@name", f.Name);
-        cmd.Parameters.AddWithValue("@addr", (object?)f.Address ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@city", (object?)f.City ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@state", (object?)f.State ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@zip", (object?)f.ZipCode ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@phone", (object?)f.Phone ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@web", (object?)f.Website ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@btype", (object?)f.BusinessType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@sec", f.IsRegisteredWithSec ? 1 : 0);
-        cmd.Parameters.AddWithValue("@finra", f.IsRegisteredWithFinra ? 1 : 0);
-        cmd.Parameters.AddWithValue("@numAdv", (object?)f.NumberOfAdvisors ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@regDate", f.RegistrationDate.HasValue ? f.RegistrationDate.Value.ToString("yyyy-MM-dd") : (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@source", (object?)f.Source ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@recordType", (object?)f.RecordType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@secNum", (object?)f.SECNumber ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@secRgn", (object?)f.SECRegion ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@legalNm", (object?)f.LegalName ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@faxPhone", (object?)f.FaxPhone ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@mailAddr", (object?)f.MailingAddress ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@regStatus", (object?)f.RegistrationStatus ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@aumDesc", (object?)f.AumDescription ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@stateOrg", (object?)f.StateOfOrganization ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@regAum",     (object?)f.RegulatoryAum ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@regAumNd",   (object?)f.RegulatoryAumNonDiscretionary ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@numClients", (object?)f.NumClients ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@bpMember",   f.BrokerProtocolMember ? 1 : 0);
-        cmd.Parameters.AddWithValue("@bpUpdated",  f.BrokerProtocolUpdatedAt.HasValue ? f.BrokerProtocolUpdatedAt.Value.ToString("O") : (object)DBNull.Value);
     }
 
     /// <summary>
@@ -790,7 +469,10 @@ public class AdvisorRepository
     /// </summary>
     public void UpsertFirmBatch(IEnumerable<Firm> firms, IProgress<string>? progress = null)
     {
-        var conn = _context.GetConnection();
+        var conn = _context.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            conn.Open();
+
         using var txn = conn.BeginTransaction();
         using var cmd = conn.CreateCommand();
         cmd.Transaction = txn;
@@ -844,33 +526,41 @@ public class AdvisorRepository
         foreach (var f in firms)
         {
             cmd.Parameters.Clear();
-            cmd.Parameters.AddWithValue("@crd", f.CrdNumber);
-            cmd.Parameters.AddWithValue("@name", f.Name);
-            cmd.Parameters.AddWithValue("@legal", (object?)f.LegalName ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@sec", (object?)f.SECNumber ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@region", (object?)f.SECRegion ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@addr", (object?)f.Address ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@city", (object?)f.City ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@state", (object?)f.State ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@country", (object?)f.Country ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@zip", (object?)f.ZipCode ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@phone", (object?)f.Phone ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@fax", (object?)f.FaxPhone ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@web", (object?)f.Website ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@mail", (object?)f.MailingAddress ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@btype", (object?)f.BusinessType ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@stateOrg", (object?)f.StateOfOrganization ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@rectype", (object?)f.RecordType ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@regstatus", (object?)f.RegistrationStatus ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@regdate", f.RegistrationDate.HasValue
-                ? (object)f.RegistrationDate.Value.ToString("yyyy-MM-dd") : DBNull.Value);
-            cmd.Parameters.AddWithValue("@filingdate", (object?)f.LatestFilingDate ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@numadv", (object?)f.NumberOfAdvisors ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@numemp", (object?)f.NumberOfEmployees ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@aum", (object?)f.AumDescription ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@regaum", (object?)f.RegulatoryAum ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@regaumnd", (object?)f.RegulatoryAumNonDiscretionary ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@numclients", (object?)f.NumClients ?? DBNull.Value);
+
+            void AddParam(string name, object? value) {
+                var p = cmd.CreateParameter();
+                p.ParameterName = name;
+                p.Value = value ?? DBNull.Value;
+                cmd.Parameters.Add(p);
+            }
+
+            AddParam("@crd", f.CrdNumber);
+            AddParam("@name", f.Name);
+            AddParam("@legal", f.LegalName);
+            AddParam("@sec", f.SECNumber);
+            AddParam("@region", f.SECRegion);
+            AddParam("@addr", f.Address);
+            AddParam("@city", f.City);
+            AddParam("@state", f.State);
+            AddParam("@country", f.Country);
+            AddParam("@zip", f.ZipCode);
+            AddParam("@phone", f.Phone);
+            AddParam("@fax", f.FaxPhone);
+            AddParam("@web", f.Website);
+            AddParam("@mail", f.MailingAddress);
+            AddParam("@btype", f.BusinessType);
+            AddParam("@stateOrg", f.StateOfOrganization);
+            AddParam("@rectype", f.RecordType);
+            AddParam("@regstatus", f.RegistrationStatus);
+            AddParam("@regdate", f.RegistrationDate.HasValue
+                ? (object)f.RegistrationDate.Value.ToString("yyyy-MM-dd") : null);
+            AddParam("@filingdate", f.LatestFilingDate);
+            AddParam("@numadv", f.NumberOfAdvisors);
+            AddParam("@numemp", f.NumberOfEmployees);
+            AddParam("@aum", f.AumDescription);
+            AddParam("@regaum", f.RegulatoryAum);
+            AddParam("@regaumnd", f.RegulatoryAumNonDiscretionary);
+            AddParam("@numclients", f.NumClients);
             cmd.ExecuteNonQuery();
             count++;
             if (count % 1000 == 0)
@@ -883,243 +573,116 @@ public class AdvisorRepository
 
     public List<string> GetDistinctStates()
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DISTINCT State FROM Advisors WHERE State IS NOT NULL AND IsExcluded=0 ORDER BY State";
-        var states = new List<string>();
-        using var r = cmd.ExecuteReader();
-        while (r.Read())
-            states.Add(r.GetString(0));
-        return states;
+        return _context.Advisors.AsNoTracking()
+            .Where(a => a.State != null && !a.IsExcluded)
+            .Select(a => a.State!)
+            .Distinct()
+            .OrderBy(s => s)
+            .ToList();
     }
 
     public List<string> GetDistinctFirmStates()
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DISTINCT State FROM Firms WHERE State IS NOT NULL AND IsExcluded=0 ORDER BY State";
-        var states = new List<string>();
-        using var r = cmd.ExecuteReader();
-        while (r.Read())
-            states.Add(r.GetString(0));
-        return states;
+        return _context.Firms.AsNoTracking()
+            .Where(f => f.State != null && !f.IsExcluded)
+            .Select(f => f.State!)
+            .Distinct()
+            .OrderBy(s => s)
+            .ToList();
     }
 
     public List<string> GetDistinctFirmNames()
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DISTINCT CurrentFirmName FROM Advisors WHERE CurrentFirmName IS NOT NULL AND IsExcluded=0 ORDER BY CurrentFirmName LIMIT 200";
-        var firms = new List<string>();
-        using var r = cmd.ExecuteReader();
-        while (r.Read())
-            firms.Add(r.GetString(0));
-        return firms;
+        return _context.Advisors.AsNoTracking()
+            .Where(a => a.CurrentFirmName != null && !a.IsExcluded)
+            .Select(a => a.CurrentFirmName!)
+            .Distinct()
+            .OrderBy(n => n)
+            .Take(200)
+            .ToList();
     }
 
     public int GetAdvisorCount(SearchFilter filter)
     {
-        var conn = _context.GetConnection();
-        var sb = new StringBuilder("SELECT COUNT(*) FROM Advisors WHERE 1=1");
-        var parameters = new List<(string name, object value)>();
+        IQueryable<Advisor> query = _context.Advisors.AsNoTracking();
 
         if (!filter.IncludeExcluded)
-            sb.Append(" AND IsExcluded = 0");
+            query = query.Where(a => !a.IsExcluded);
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
         {
-            sb.Append(" AND (FirstName LIKE @name OR LastName LIKE @name OR (FirstName || ' ' || LastName) LIKE @name)");
-            parameters.Add(("@name", $"%{filter.NameQuery}%"));
+            var pattern = $"%{filter.NameQuery}%";
+            query = query.Where(a =>
+                EF.Functions.Like(a.FirstName, pattern) ||
+                EF.Functions.Like(a.LastName, pattern));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.State))
-        {
-            sb.Append(" AND State = @state");
-            parameters.Add(("@state", filter.State));
-        }
+            query = query.Where(a => a.State == filter.State);
 
         if (!string.IsNullOrWhiteSpace(filter.FirmName))
         {
-            sb.Append(" AND CurrentFirmName LIKE @firmName");
-            parameters.Add(("@firmName", $"%{filter.FirmName}%"));
+            var pattern = $"%{filter.FirmName}%";
+            query = query.Where(a => EF.Functions.Like(a.CurrentFirmName!, pattern));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.FirmCrd))
-        {
-            sb.Append(" AND CurrentFirmCrd = @firmCrd");
-            parameters.Add(("@firmCrd", filter.FirmCrd));
-        }
+            query = query.Where(a => a.CurrentFirmCrd == filter.FirmCrd);
 
         if (!string.IsNullOrWhiteSpace(filter.CrdNumber))
-        {
-            sb.Append(" AND CrdNumber = @crd");
-            parameters.Add(("@crd", filter.CrdNumber));
-        }
+            query = query.Where(a => a.CrdNumber == filter.CrdNumber);
 
         if (!string.IsNullOrWhiteSpace(filter.RegistrationStatus))
-        {
-            sb.Append(" AND RegistrationStatus LIKE @status");
-            parameters.Add(("@status", filter.RegistrationStatus));
-        }
+            query = query.Where(a => EF.Functions.Like(a.RegistrationStatus!, filter.RegistrationStatus));
 
         if (!string.IsNullOrWhiteSpace(filter.LicenseType))
         {
-            sb.Append(" AND Licenses LIKE @license");
-            parameters.Add(("@license", $"%{filter.LicenseType}%"));
+            var pattern = $"%{filter.LicenseType}%";
+            query = query.Where(a => EF.Functions.Like(a.Licenses!, pattern));
         }
 
         if (filter.HasDisclosures.HasValue)
-        {
-            sb.Append(" AND HasDisclosures = @hasDisc");
-            parameters.Add(("@hasDisc", filter.HasDisclosures.Value ? 1 : 0));
-        }
+            query = query.Where(a => a.HasDisclosures == filter.HasDisclosures.Value);
 
         if (filter.IsImportedToCrm.HasValue)
-        {
-            sb.Append(" AND IsImportedToCrm = @imported");
-            parameters.Add(("@imported", filter.IsImportedToCrm.Value ? 1 : 0));
-        }
+            query = query.Where(a => a.IsImportedToCrm == filter.IsImportedToCrm.Value);
 
         if (!string.IsNullOrWhiteSpace(filter.Source))
         {
             if (filter.Source.Equals("Both", StringComparison.OrdinalIgnoreCase)
                 || filter.Source.Contains(','))
             {
-                sb.Append(" AND Source LIKE '%FINRA%' AND Source LIKE '%SEC%'");
+                query = query.Where(a => a.Source != null && a.Source.Contains("FINRA") && a.Source.Contains("SEC"));
             }
             else
             {
-                sb.Append(" AND Source LIKE @source");
-                parameters.Add(("@source", $"%{filter.Source}%"));
+                var pattern = $"%{filter.Source}%";
+                query = query.Where(a => EF.Functions.Like(a.Source!, pattern));
             }
         }
 
         if (!string.IsNullOrWhiteSpace(filter.RecordType))
-        {
-            sb.Append(" AND RecordType = @recordType");
-            parameters.Add(("@recordType", filter.RecordType));
-        }
+            query = query.Where(a => a.RecordType == filter.RecordType);
 
         if (filter.MinYearsExperience.HasValue)
-        {
-            sb.Append(" AND YearsOfExperience >= @minYears");
-            parameters.Add(("@minYears", filter.MinYearsExperience.Value));
-        }
+            query = query.Where(a => a.YearsOfExperience >= filter.MinYearsExperience.Value);
 
         if (filter.MaxYearsExperience.HasValue)
-        {
-            sb.Append(" AND YearsOfExperience <= @maxYears");
-            parameters.Add(("@maxYears", filter.MaxYearsExperience.Value));
-        }
+            query = query.Where(a => a.YearsOfExperience <= filter.MaxYearsExperience.Value);
 
         if (!string.IsNullOrWhiteSpace(filter.City))
         {
-            sb.Append(" AND City LIKE @city");
-            parameters.Add(("@city", $"%{filter.City}%"));
+            var pattern = $"%{filter.City}%";
+            query = query.Where(a => EF.Functions.Like(a.City!, pattern));
         }
 
         if (filter.MinDisclosureCount.HasValue && filter.MinDisclosureCount.Value > 0)
-        {
-            sb.Append(" AND DisclosureCount >= @minDisc");
-            parameters.Add(("@minDisc", filter.MinDisclosureCount.Value));
-        }
+            query = query.Where(a => a.DisclosureCount >= filter.MinDisclosureCount.Value);
 
         if (filter.ShowFavoritesOnly)
-        {
-            sb.Append(" AND IsFavorited = 1");
-        }
+            query = query.Where(a => a.IsFavorited);
 
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = sb.ToString();
-        foreach (var (name, value) in parameters)
-            cmd.Parameters.AddWithValue(name, value);
-
-        return Convert.ToInt32(cmd.ExecuteScalar());
-    }
-
-    private static Advisor MapAdvisor(SqliteDataReader r)
-    {
-        return new Advisor
-        {
-            Id = r.GetInt32(0),
-            CrdNumber = r.IsDBNull(1) ? null : r.GetString(1),
-            IapdNumber = r.IsDBNull(2) ? null : r.GetString(2),
-            FirstName = r.GetString(3),
-            LastName = r.GetString(4),
-            MiddleName = r.IsDBNull(5) ? null : r.GetString(5),
-            Title = r.IsDBNull(6) ? null : r.GetString(6),
-            Email = r.IsDBNull(7) ? null : r.GetString(7),
-            Phone = r.IsDBNull(8) ? null : r.GetString(8),
-            City = r.IsDBNull(9) ? null : r.GetString(9),
-            State = r.IsDBNull(10) ? null : r.GetString(10),
-            ZipCode = r.IsDBNull(11) ? null : r.GetString(11),
-            Licenses = r.IsDBNull(12) ? null : r.GetString(12),
-            Qualifications = r.IsDBNull(13) ? null : r.GetString(13),
-            CurrentFirmName = r.IsDBNull(14) ? null : r.GetString(14),
-            CurrentFirmCrd = r.IsDBNull(15) ? null : r.GetString(15),
-            CurrentFirmId = r.IsDBNull(16) ? null : r.GetInt32(16),
-            RegistrationStatus = r.IsDBNull(17) ? null : r.GetString(17),
-            RegistrationDate = r.IsDBNull(18) ? null : DateTime.Parse(r.GetString(18)),
-            YearsOfExperience = r.IsDBNull(19) ? null : r.GetInt32(19),
-            HasDisclosures = r.GetInt32(20) == 1,
-            DisclosureCount = r.GetInt32(21),
-            Source = r.IsDBNull(22) ? null : r.GetString(22),
-            IsExcluded = r.GetInt32(23) == 1,
-            ExclusionReason = r.IsDBNull(24) ? null : r.GetString(24),
-            IsImportedToCrm = r.GetInt32(25) == 1,
-            CrmId = r.IsDBNull(26) ? null : r.GetString(26),
-            CreatedAt = DateTime.Parse(r.GetString(27)),
-            UpdatedAt = DateTime.Parse(r.GetString(28)),
-            RecordType = r.IsDBNull(29) ? null : r.GetString(29),
-            Suffix = r.FieldCount > 30 && !r.IsDBNull(30) ? r.GetString(30) : null,
-            IapdLink = r.FieldCount > 31 && !r.IsDBNull(31) ? r.GetString(31) : null,
-            RegAuthorities = r.FieldCount > 32 && !r.IsDBNull(32) ? r.GetString(32) : null,
-            DisclosureFlags = r.FieldCount > 33 && !r.IsDBNull(33) ? r.GetString(33) : null,
-            OtherNames = r.FieldCount > 34 && !r.IsDBNull(34) ? r.GetString(34) : null,
-            IsFavorited = r.FieldCount > 35 && r.GetInt32(35) == 1
-        };
-    }
-
-    private static Firm MapFirm(SqliteDataReader r)
-    {
-        return new Firm
-        {
-            Id = r.GetInt32(0),
-            CrdNumber = r.IsDBNull(1) ? string.Empty : r.GetString(1),
-            Name = r.GetString(2),
-            Address = r.IsDBNull(3) ? null : r.GetString(3),
-            City = r.IsDBNull(4) ? null : r.GetString(4),
-            State = r.IsDBNull(5) ? null : r.GetString(5),
-            ZipCode = r.IsDBNull(6) ? null : r.GetString(6),
-            Phone = r.IsDBNull(7) ? null : r.GetString(7),
-            Website = r.IsDBNull(8) ? null : r.GetString(8),
-            BusinessType = r.IsDBNull(9) ? null : r.GetString(9),
-            IsRegisteredWithSec = r.GetInt32(10) == 1,
-            IsRegisteredWithFinra = r.GetInt32(11) == 1,
-            NumberOfAdvisors = r.IsDBNull(12) ? null : r.GetInt32(12),
-            RegistrationDate = r.IsDBNull(13) ? null : DateTime.Parse(r.GetString(13)),
-            Source = r.IsDBNull(14) ? null : r.GetString(14),
-            IsExcluded = r.GetInt32(15) == 1,
-            CreatedAt = DateTime.Parse(r.GetString(16)),
-            UpdatedAt = DateTime.Parse(r.GetString(17)),
-            RecordType = r.IsDBNull(18) ? null : r.GetString(18),
-            SECNumber = r.FieldCount > 19 && !r.IsDBNull(19) ? r.GetString(19) : null,
-            SECRegion = r.FieldCount > 20 && !r.IsDBNull(20) ? r.GetString(20) : null,
-            LegalName = r.FieldCount > 21 && !r.IsDBNull(21) ? r.GetString(21) : null,
-            FaxPhone = r.FieldCount > 22 && !r.IsDBNull(22) ? r.GetString(22) : null,
-            MailingAddress = r.FieldCount > 23 && !r.IsDBNull(23) ? r.GetString(23) : null,
-            RegistrationStatus = r.FieldCount > 24 && !r.IsDBNull(24) ? r.GetString(24) : null,
-            AumDescription = r.FieldCount > 25 && !r.IsDBNull(25) ? r.GetString(25) : null,
-            StateOfOrganization = r.FieldCount > 26 && !r.IsDBNull(26) ? r.GetString(26) : null,
-            Country = r.FieldCount > 27 && !r.IsDBNull(27) ? r.GetString(27) : null,
-            NumberOfEmployees = r.FieldCount > 28 && !r.IsDBNull(28) ? r.GetInt32(28) : null,
-            LatestFilingDate = r.FieldCount > 29 && !r.IsDBNull(29) ? r.GetString(29) : null,
-            RegulatoryAum = r.FieldCount > 30 && !r.IsDBNull(30) ? (decimal?)r.GetDouble(30) : null,
-            RegulatoryAumNonDiscretionary = r.FieldCount > 31 && !r.IsDBNull(31) ? (decimal?)r.GetDouble(31) : null,
-            NumClients = r.FieldCount > 32 && !r.IsDBNull(32) ? r.GetInt32(32) : null,
-            BrokerProtocolMember = r.FieldCount > 33 && !r.IsDBNull(33) && r.GetInt32(33) == 1,
-            BrokerProtocolUpdatedAt = r.FieldCount > 34 && !r.IsDBNull(34) ? DateTime.Parse(r.GetString(34)) : null
-        };
+        return query.Count();
     }
 
     /// <summary>
@@ -1128,27 +691,17 @@ public class AdvisorRepository
     /// </summary>
     public int UpdateBrokerProtocolStatus(List<string> memberNames, DateTime fetchedAt)
     {
-        var conn = _context.GetConnection();
-        int updated = 0;
-
         // Clear all existing memberships
-        using (var clearCmd = conn.CreateCommand())
-        {
-            clearCmd.CommandText = "UPDATE Firms SET BrokerProtocolMember = 0";
-            clearCmd.ExecuteNonQuery();
-        }
+        _context.Firms.ExecuteUpdate(s => s
+            .SetProperty(f => f.BrokerProtocolMember, false));
 
         if (memberNames.Count == 0) return 0;
 
         // Load all firm names for fuzzy matching
-        var firms = new List<(int Id, string Name)>();
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.CommandText = "SELECT Id, Name FROM Firms WHERE Name IS NOT NULL";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
-                firms.Add((r.GetInt32(0), r.GetString(1)));
-        }
+        var firms = _context.Firms.AsNoTracking()
+            .Where(f => f.Name != null)
+            .Select(f => new { f.Id, f.Name })
+            .ToList();
 
         // Normalize a name for matching: lowercase, strip legal suffixes, remove punctuation
         static string Normalize(string s) => System.Text.RegularExpressions.Regex.Replace(
@@ -1161,23 +714,24 @@ public class AdvisorRepository
         var memberNormalized = memberNames.Select(Normalize).ToHashSet();
 
         var toUpdate = new List<int>();
-        foreach (var (id, name) in firms)
+        foreach (var f in firms)
         {
-            var norm = Normalize(name);
+            var norm = Normalize(f.Name);
             if (memberNormalized.Contains(norm) ||
                 memberNormalized.Any(m => norm.Contains(m) || m.Contains(norm)))
             {
-                toUpdate.Add(id);
+                toUpdate.Add(f.Id);
             }
         }
 
+        int updated = 0;
         if (toUpdate.Count > 0)
         {
-            using var updateCmd = conn.CreateCommand();
-            var idList = string.Join(",", toUpdate);
-            updateCmd.CommandText = $"UPDATE Firms SET BrokerProtocolMember = 1, BrokerProtocolUpdatedAt = @ts WHERE Id IN ({idList})";
-            updateCmd.Parameters.AddWithValue("@ts", fetchedAt.ToString("O"));
-            updated = updateCmd.ExecuteNonQuery();
+            updated = _context.Firms
+                .Where(f => toUpdate.Contains(f.Id))
+                .ExecuteUpdate(s => s
+                    .SetProperty(f => f.BrokerProtocolMember, true)
+                    .SetProperty(f => f.BrokerProtocolUpdatedAt, fetchedAt));
         }
 
         return updated;
