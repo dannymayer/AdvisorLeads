@@ -224,6 +224,7 @@ public class AdvisorCard : Panel
         var bg = _advisor?.IsExcluded == true ? ExcludedBg
                : _advisor?.IsFavorited == true ? FavoriteBg
                : DefaultBg;
+        var bg = _advisor?.IsExcluded == true ? ExcludedBg : DefaultBg;
         using var bgBrush = new SolidBrush(bg);
         g.FillRectangle(bgBrush, ClientRectangle);
 
@@ -250,6 +251,7 @@ public class AdvisorCard : Panel
         }
 
         // Disclosure count indicator (top-right corner, offset when star present)
+        // Disclosure count indicator (top-right corner)
         if (_advisor != null && _advisor.HasDisclosures && _advisor.DisclosureCount > 0)
         {
             var text = _advisor.DisclosureCount.ToString();
@@ -257,6 +259,7 @@ public class AdvisorCard : Panel
             var size = g.MeasureString(text, font);
             int offset = _advisor.IsFavorited ? 28 : 0;
             int cx = Width - (int)size.Width - 12 - offset;
+            int cx = Width - (int)size.Width - 12;
             int cy = CardPadding;
             using var discBg = new SolidBrush(Color.FromArgb(230, 126, 34));
             g.FillEllipse(discBg, cx - 3, cy - 1, size.Width + 6, size.Height + 2);
@@ -277,5 +280,6 @@ public class AdvisorCard : Panel
             BackColor = HoverBg;
         else
             BackColor = _advisor?.IsFavorited == true ? FavoriteBg : DefaultBg;
+        BackColor = hovering ? HoverBg : DefaultBg;
     }
 }
