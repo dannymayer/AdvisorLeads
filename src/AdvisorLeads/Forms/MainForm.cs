@@ -50,6 +50,10 @@ public class MainForm : Form
     private int _lvCacheStart = 0;
     private int _totalAdvisorCount = 0;
     private int _currentPage = 1;
+    // Tracks CRDs for which on-demand disclosure enrichment has already been triggered
+    // this session, preventing infinite retry loops when FINRA returns no disclosures.
+    private readonly HashSet<string> _enrichmentTriggered =
+        new(StringComparer.OrdinalIgnoreCase);
     private ToolStripButton _btnPrevPage = null!;
     private ToolStripButton _btnNextPage = null!;
 
@@ -667,10 +671,13 @@ public class MainForm : Form
         // silently fetch full FINRA detail in the background and refresh the card once done.
         // This covers the common case where the bulk fetch set HasDisclosures=true but the
         // per-advisor enrichment pass had not yet reached this record.
+        // _enrichmentTriggered.Add() returns false if already added, preventing infinite retries
+        // in the edge case where FINRA returns HasDisclosures=true but an empty disclosures array.
         var crdNumber = advisor.CrdNumber;
         bool needsDisclosureEnrich = advisor.HasDisclosures
             && advisor.Disclosures.Count == 0
-            && !string.IsNullOrEmpty(crdNumber);
+            && !string.IsNullOrEmpty(crdNumber)
+            && _enrichmentTriggered.Add(crdNumber!);
 
         if (needsDisclosureEnrich)
         {
