@@ -40,6 +40,81 @@ public class Firm
     public bool BrokerProtocolMember { get; set; }
     /// <summary>When the Broker Protocol membership was last confirmed/updated.</summary>
     public DateTime? BrokerProtocolUpdatedAt { get; set; }
+    // ── Compensation types (Form ADV Item 5E / 6A) ──
+
+    /// <summary>Whether the firm charges fee-only compensation (CSV column "5E(a)" / "6A(1)").</summary>
+    public bool? CompensationFeeOnly { get; set; }
+
+    /// <summary>Whether the firm earns commission-based compensation (CSV column "5E(b)" / "6A(2)").</summary>
+    public bool? CompensationCommission { get; set; }
+
+    /// <summary>Whether the firm charges hourly fees (CSV column "5E(c)" / "6A(3)").</summary>
+    public bool? CompensationHourly { get; set; }
+
+    /// <summary>Whether the firm charges performance-based fees (CSV column "5E(d)" / "6A(4)").</summary>
+    public bool? CompensationPerformanceBased { get; set; }
+
+    // ── Advisory activities ──
+
+    /// <summary>Composite description of advisory service types offered (derived from Item 6 columns).</summary>
+    public string? AdvisoryActivities { get; set; }
+
+    // ── Client type breakdowns (Form ADV Item 5D sub-columns) ──
+
+    /// <summary>Number of individual clients (CSV column "5D(1)" / "5D(a)").</summary>
+    public int? ClientsIndividuals { get; set; }
+
+    /// <summary>Number of high-net-worth individual clients (CSV column "5D(2)" / "5D(b)").</summary>
+    public int? ClientsHighNetWorth { get; set; }
+
+    /// <summary>Number of banking/thrift institution clients (CSV column "5D(3)" / "5D(c)").</summary>
+    public int? ClientsBankingInstitutions { get; set; }
+
+    /// <summary>Number of investment company clients (CSV column "5D(4)" / "5D(d)").</summary>
+    public int? ClientsInvestmentCompanies { get; set; }
+
+    /// <summary>Number of pension/profit-sharing plan clients (CSV column "5D(5)" / "5D(e)").</summary>
+    public int? ClientsPensionPlans { get; set; }
+
+    /// <summary>Number of charitable organization clients (CSV column "5D(6)" / "5D(f)").</summary>
+    public int? ClientsCharitable { get; set; }
+
+    /// <summary>Number of state/municipal government clients (CSV column "5D(7)" / "5D(g)").</summary>
+    public int? ClientsGovernment { get; set; }
+
+    /// <summary>Number of other client types (CSV column "5D(8)" / "5D(13)" / "5D(h)").</summary>
+    public int? ClientsOther { get; set; }
+
+    // ── Custody and discretion ──
+
+    /// <summary>Whether the firm has custody of client assets (CSV column "9A" / "9A(1)").</summary>
+    public bool? HasCustody { get; set; }
+
+    /// <summary>Whether the firm exercises discretionary authority (CSV column "5F(1)").</summary>
+    public bool? HasDiscretionaryAuthority { get; set; }
+
+    // ── Private fund data ──
+
+    /// <summary>Number of private funds managed by the firm (CSV column "7B" / "7B(1)").</summary>
+    public int? PrivateFundCount { get; set; }
+
+    /// <summary>Gross asset value of private funds in USD (CSV column "7B(1)" / "7B(2)").</summary>
+    public decimal? PrivateFundGrossAssets { get; set; }
+
+    // ── Other business ──
+
+    /// <summary>Number of offices/locations operated by the firm (CSV column "1F" / "1.F").</summary>
+    public int? NumberOfOffices { get; set; }
+
+    /// <summary>Whether the firm is also registered as a broker-dealer (CSV column "1I" / "7A(1)").</summary>
+    public bool? IsBrokerDealer { get; set; }
+
+    /// <summary>Whether the firm is also an insurance company or agency (CSV column "7A(2)" / "7A(8)").</summary>
+    public bool? IsInsuranceCompany { get; set; }
+
+    /// <summary>Total AUM of related persons/affiliates in USD (CSV column "5F(2)(c)" / "5F(3)").</summary>
+    public decimal? TotalAumRelatedPersons { get; set; }
+
     public bool IsExcluded { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

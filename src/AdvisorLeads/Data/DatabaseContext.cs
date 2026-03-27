@@ -19,6 +19,12 @@ public class DatabaseContext : DbContext
     public DbSet<Qualification> Qualifications => Set<Qualification>();
     public DbSet<AdvisorList> AdvisorLists => Set<AdvisorList>();
     public DbSet<AdvisorListMember> AdvisorListMembers => Set<AdvisorListMember>();
+    public DbSet<EdgarSearchResult> EdgarSearchResults => Set<EdgarSearchResult>();
+    public DbSet<FirmFiling> FirmFilings => Set<FirmFiling>();
+    public DbSet<FirmOwnership> FirmOwnership => Set<FirmOwnership>();
+    public DbSet<FormAdvFiling> FormAdvFilings => Set<FormAdvFiling>();
+    public DbSet<FirmFilingEvent> FirmFilingEvents => Set<FirmFilingEvent>();
+    public DbSet<FirmAumHistory> FirmAumHistory => Set<FirmAumHistory>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder options)
     {
@@ -39,6 +45,14 @@ public class DatabaseContext : DbContext
             e.Property(f => f.IsRegisteredWithFinra).HasDefaultValue(false);
             e.Property(f => f.IsExcluded).HasDefaultValue(false);
             e.Property(f => f.BrokerProtocolMember).HasDefaultValue(false);
+            e.Property(f => f.CompensationFeeOnly).HasDefaultValue(false);
+            e.Property(f => f.CompensationCommission).HasDefaultValue(false);
+            e.Property(f => f.CompensationHourly).HasDefaultValue(false);
+            e.Property(f => f.CompensationPerformanceBased).HasDefaultValue(false);
+            e.Property(f => f.HasCustody).HasDefaultValue(false);
+            e.Property(f => f.HasDiscretionaryAuthority).HasDefaultValue(false);
+            e.Property(f => f.IsBrokerDealer).HasDefaultValue(false);
+            e.Property(f => f.IsInsuranceCompany).HasDefaultValue(false);
             e.Property(f => f.CreatedAt).HasDefaultValueSql("datetime('now')");
             e.Property(f => f.UpdatedAt).HasDefaultValueSql("datetime('now')");
         });
@@ -136,6 +150,76 @@ public class DatabaseContext : DbContext
                 .HasForeignKey(lm => lm.AdvisorId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+        // ── FirmOwnership ──
+        m.Entity<FirmOwnership>(e =>
+        {
+            e.ToTable("FirmOwnership");
+            e.HasKey(o => o.Id);
+            e.HasIndex(o => o.FirmCrd);
+            e.HasIndex(o => new { o.FirmCrd, o.FilingDate });
+            e.Property(o => o.IsDirectOwner).HasDefaultValue(true);
+            e.Property(o => o.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── FormAdvFilings ──
+        m.Entity<FormAdvFiling>(e =>
+        {
+            e.ToTable("FormAdvFilings");
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => f.FirmCrd);
+            e.HasIndex(f => new { f.FirmCrd, f.FilingDate });
+            e.HasIndex(f => f.FilingDate);
+            e.Property(f => f.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── FirmFilingEvents ──
+        m.Entity<FirmFilingEvent>(e =>
+        {
+            e.ToTable("FirmFilingEvents");
+            e.HasKey(ev => ev.Id);
+            e.HasIndex(ev => ev.FirmCrd);
+            e.HasIndex(ev => ev.EventType);
+            e.HasIndex(ev => ev.EventDate);
+            e.HasIndex(ev => ev.Severity);
+            e.HasIndex(ev => new { ev.FirmCrd, ev.EventDate });
+            e.Property(ev => ev.IsReviewed).HasDefaultValue(false);
+            e.Property(ev => ev.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── EdgarSearchResults ──
+        m.Entity<EdgarSearchResult>(e =>
+        {
+            e.ToTable("EdgarSearchResults");
+            e.HasKey(r => r.Id);
+            e.HasIndex(r => r.FirmCrd);
+            e.HasIndex(r => r.AccessionNumber);
+            e.HasIndex(r => new { r.AccessionNumber, r.SearchQuery });
+            e.HasIndex(r => r.Category);
+            e.Property(r => r.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── FirmFilings ──
+        m.Entity<FirmFiling>(e =>
+        {
+            e.ToTable("FirmFilings");
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => f.FirmCrd);
+            e.HasIndex(f => f.AccessionNumber).IsUnique();
+            e.HasIndex(f => new { f.FirmCrd, f.FilingDate });
+            e.Property(f => f.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── FirmAumHistory ──
+        m.Entity<FirmAumHistory>(e =>
+        {
+            e.ToTable("FirmAumHistory");
+            e.HasKey(h => h.Id);
+            e.HasIndex(h => h.FirmCrd);
+            e.HasIndex(h => new { h.FirmCrd, h.SnapshotDate }).IsUnique();
+            e.HasIndex(h => h.SnapshotDate);
+            e.Property(h => h.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
     }
 
     /// <summary>
@@ -166,8 +250,14 @@ public class DatabaseContext : DbContext
         AdvisorListMembers.ExecuteDelete();
         AdvisorLists.ExecuteDelete();
         Advisors.ExecuteDelete();
+        EdgarSearchResults.ExecuteDelete();
+        FirmFilingEvents.ExecuteDelete();
+        FirmFilings.ExecuteDelete();
+        FirmAumHistory.ExecuteDelete();
         Firms.ExecuteDelete();
+        FirmOwnership.ExecuteDelete();
+        FormAdvFilings.ExecuteDelete();
         Database.ExecuteSqlRaw(
-            "DELETE FROM sqlite_sequence WHERE name IN ('AdvisorListMembers','AdvisorLists','Qualifications','Disclosures','EmploymentHistory','Advisors','Firms')");
+            "DELETE FROM sqlite_sequence WHERE name IN ('EdgarSearchResults','FirmFilings','FirmFilingEvents','AdvisorListMembers','AdvisorLists','Qualifications','Disclosures','EmploymentHistory','Advisors','Firms','FirmOwnership','FormAdvFilings','FirmAumHistory')");
     }
 }

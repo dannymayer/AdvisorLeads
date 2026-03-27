@@ -11,4 +11,13 @@ public class FirmSearchFilter
     public bool SortDescending { get; set; } = false;
     public bool BrokerProtocolOnly { get; set; }
     public decimal? MinRegulatoryAum { get; set; }
+    public bool? HasCustody { get; set; }
+    public bool? HasDiscretionaryAuthority { get; set; }
+    /// <summary>"FeeOnly", "Commission", or "Both".</summary>
+    public string? CompensationType { get; set; }
+    public int? MinPrivateFunds { get; set; }
+    /// <summary>Minimum M&A target score (0-100) to filter by.</summary>
+    public int? MinMaScore { get; set; }
+    /// <summary>M&A score grade filter: "A", "B", "C", "D", "F".</summary>
+    public string? MaScoreGrade { get; set; }
 }

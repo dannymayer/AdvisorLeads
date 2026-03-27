@@ -211,6 +211,72 @@ public class SecMonthlyFirmService
         if (int.TryParse(numAdvStr.Replace(",", ""), out var na) && na > 0)
             numAdvisors = na;
 
+        // Compensation types
+        bool? compFeeOnly = ParseBool(Get("5E(a)"), Get("6A(1)"), Get("5E1"));
+        bool? compCommission = ParseBool(Get("5E(b)"), Get("6A(2)"), Get("5E2"));
+        bool? compHourly = ParseBool(Get("5E(c)"), Get("6A(3)"), Get("5E3"));
+        bool? compPerformance = ParseBool(Get("5E(d)"), Get("6A(4)"), Get("5E4"));
+
+        // Advisory activities (composite from Item 6 sub-columns)
+        var activityLabels = new (string[] keys, string label)[]
+        {
+            (new[] { "6A(1)", "6A1" }, "Financial Planning"),
+            (new[] { "6A(2)", "6A2" }, "Portfolio Management"),
+            (new[] { "6A(3)", "6A3" }, "Pension Consulting"),
+            (new[] { "6A(4)", "6A4" }, "Selection of Other Advisers"),
+            (new[] { "6A(5)", "6A5" }, "Publication of Reports"),
+            (new[] { "6A(6)", "6A6" }, "Security Ratings"),
+            (new[] { "6A(7)", "6A7" }, "Market Timing"),
+            (new[] { "6A(8)", "6A8" }, "Educational Seminars"),
+            (new[] { "6A(9)", "6A9" }, "Other"),
+        };
+        var activities = new List<string>();
+        foreach (var (keys, label) in activityLabels)
+        {
+            foreach (var k in keys)
+            {
+                var v = Get(k);
+                if (IsYes(v)) { activities.Add(label); break; }
+            }
+        }
+        string? advisoryActivities = activities.Count > 0 ? string.Join("; ", activities) : null;
+
+        // Client type breakdowns (Item 5D sub-columns)
+        int? clientsIndividuals = ParseInt(Get("5D(1)"), Get("5D(a)"), Get("5D1"));
+        int? clientsHighNetWorth = ParseInt(Get("5D(2)"), Get("5D(b)"), Get("5D2"));
+        int? clientsBanking = ParseInt(Get("5D(3)"), Get("5D(c)"), Get("5D3"));
+        int? clientsInvestment = ParseInt(Get("5D(4)"), Get("5D(d)"), Get("5D4"));
+        int? clientsPension = ParseInt(Get("5D(5)"), Get("5D(e)"), Get("5D5"));
+        int? clientsCharitable = ParseInt(Get("5D(6)"), Get("5D(f)"), Get("5D6"));
+        int? clientsGovt = ParseInt(Get("5D(7)"), Get("5D(g)"), Get("5D7"));
+        int? clientsOther = ParseInt(Get("5D(8)"), Get("5D(13)"), Get("5D(h)"), Get("5D8"));
+
+        // Custody and discretion
+        bool? hasCustody = ParseBool(Get("9A"), Get("9A(1)"), Get("9A1"));
+        bool? hasDiscretion = ParseBool(Get("5F(1)"), Get("5F1"));
+
+        // Private fund data
+        int? privateFundCount = ParseInt(Get("7B"), Get("7B(1)"), Get("7B1"));
+        decimal? privateFundGrossAssets = ParseDecimal(Get("7B(1)"), Get("7B(2)"), Get("7B2"));
+        // If privateFundCount consumed the same column as gross assets, disambiguate:
+        // 7B = count, 7B(1) or 7B(2) = gross assets – prefer higher column index for assets
+        if (privateFundCount == null)
+            privateFundCount = ParseInt(Get("7B"));
+        if (privateFundGrossAssets == null)
+            privateFundGrossAssets = ParseDecimal(Get("7B(2)"));
+
+        // Number of offices
+        int? numOffices = ParseInt(Get("1F"), Get("1.F"), Get("1F(a)"));
+
+        // Also registered as broker-dealer
+        bool? isBd = ParseBool(Get("1I"), Get("7A(1)"), Get("7A1"));
+
+        // Also an insurance company/agency
+        bool? isInsurance = ParseBool(Get("7A(2)"), Get("7A(8)"), Get("7A2"), Get("7A8"));
+
+        // Total AUM of related persons
+        decimal? totalAumRelated = ParseDecimal(Get("5F(2)(c)"), Get("5F(3)"), Get("5F2c"));
+
         return new Firm
         {
             CrdNumber          = crd,
@@ -238,6 +304,27 @@ public class SecMonthlyFirmService
             RegulatoryAum      = regulatoryAum,
             RegulatoryAumNonDiscretionary = regulatoryAumNd,
             NumClients         = numClients,
+            CompensationFeeOnly = compFeeOnly,
+            CompensationCommission = compCommission,
+            CompensationHourly = compHourly,
+            CompensationPerformanceBased = compPerformance,
+            AdvisoryActivities = advisoryActivities,
+            ClientsIndividuals = clientsIndividuals,
+            ClientsHighNetWorth = clientsHighNetWorth,
+            ClientsBankingInstitutions = clientsBanking,
+            ClientsInvestmentCompanies = clientsInvestment,
+            ClientsPensionPlans = clientsPension,
+            ClientsCharitable = clientsCharitable,
+            ClientsGovernment = clientsGovt,
+            ClientsOther = clientsOther,
+            HasCustody = hasCustody,
+            HasDiscretionaryAuthority = hasDiscretion,
+            PrivateFundCount = privateFundCount,
+            PrivateFundGrossAssets = privateFundGrossAssets,
+            NumberOfOffices = numOffices,
+            IsBrokerDealer = isBd,
+            IsInsuranceCompany = isInsurance,
+            TotalAumRelatedPersons = totalAumRelated,
             RecordType         = "Investment Advisor",
             IsRegisteredWithSec = true,
             Source             = "SEC",
@@ -246,6 +333,52 @@ public class SecMonthlyFirmService
 
     private static string? NullIfEmpty(string? s)
         => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    private static bool IsYes(string value)
+        => value.Equals("Y", StringComparison.OrdinalIgnoreCase)
+        || value.Equals("Yes", StringComparison.OrdinalIgnoreCase)
+        || value == "1";
+
+    /// <summary>Parses a boolean from multiple candidate column values (Y/N/1/0).</summary>
+    private static bool? ParseBool(params string[] values)
+    {
+        foreach (var v in values)
+        {
+            if (string.IsNullOrWhiteSpace(v)) continue;
+            if (IsYes(v)) return true;
+            if (v.Equals("N", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("No", StringComparison.OrdinalIgnoreCase)
+                || v == "0")
+                return false;
+        }
+        return null;
+    }
+
+    /// <summary>Parses an integer from multiple candidate column values.</summary>
+    private static int? ParseInt(params string[] values)
+    {
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrWhiteSpace(v) &&
+                int.TryParse(v.Replace(",", ""), out var n))
+                return n;
+        }
+        return null;
+    }
+
+    /// <summary>Parses a decimal from multiple candidate column values.</summary>
+    private static decimal? ParseDecimal(params string[] values)
+    {
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrWhiteSpace(v) &&
+                decimal.TryParse(v.Replace(",", ""),
+                    System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var d))
+                return d;
+        }
+        return null;
+    }
 
     private static string FormatAum(decimal aum)
     {
