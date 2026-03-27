@@ -341,34 +341,33 @@ public class AdvisorRepository
 
     public List<string> GetCrdsNeedingEnrichment(int limit)
     {
-        var conn = _context.GetConnection();
-        using var cmd = conn.CreateCommand();
+        using var ctx = CreateContext();
         // Include advisors that:
         //   (a) have no qualifications stored yet, OR
-        //   (b) have HasDisclosures=1 but no rows in the Disclosures table — the critical case
+        //   (b) have HasDisclosures=true but no rows in the Disclosures table — the critical case
         //       where ind_exams gave them qualifications during bulk fetch but the detail
         //       endpoint was never called to retrieve the actual disclosure records.
-        // Disclosure-flagged advisors are surfaced first so the most visible gaps are
-        // closed earliest.  The Active-only restriction has been removed so inactive or
-        // terminated advisors with disclosures are also enriched.
-        cmd.CommandText = @"
-            SELECT a.CrdNumber FROM Advisors a
-            WHERE a.CrdNumber IS NOT NULL
-              AND a.IsExcluded = 0
-              AND (
-                    NOT EXISTS (SELECT 1 FROM Qualifications q WHERE q.AdvisorId = a.Id)
-                    OR (a.HasDisclosures = 1 AND NOT EXISTS (SELECT 1 FROM Disclosures d WHERE d.AdvisorId = a.Id))
-              )
-            ORDER BY
-                CASE WHEN a.HasDisclosures = 1 AND NOT EXISTS (SELECT 1 FROM Disclosures d WHERE d.AdvisorId = a.Id) THEN 0
-                     ELSE 1 END,
-                a.UpdatedAt ASC
-            LIMIT @limit";
-        cmd.Parameters.AddWithValue("@limit", limit);
-        var result = new List<string>();
-        using var r = cmd.ExecuteReader();
-        while (r.Read()) result.Add(r.GetString(0));
-        return result;
+        // Disclosure-flagged advisors sort first so the most visible gaps close earliest.
+        // The Active-only restriction has been removed so inactive/terminated advisors
+        // with disclosures are also enriched.
+        return ctx.Advisors.AsNoTracking()
+            .Where(a => a.CrdNumber != null
+                && !a.IsExcluded
+                && (!a.QualificationList.Any()
+                    || (a.HasDisclosures && !a.Disclosures.Any())))
+            .Select(a => new
+            {
+                a.CrdNumber,
+                a.UpdatedAt,
+                // Compute priority once in a single SQL projection so the subquery
+                // is evaluated only once (not duplicated in both WHERE and ORDER BY).
+                Priority = a.HasDisclosures && !a.Disclosures.Any() ? 0 : 1
+            })
+            .OrderBy(a => a.Priority)
+            .ThenBy(a => a.UpdatedAt)
+            .Take(limit)
+            .Select(a => a.CrdNumber!)
+            .ToList();
     }
 
     /// <summary>

@@ -679,10 +679,22 @@ public class MainForm : Form
                 }
                 catch { /* non-critical background enrichment */ }
 
-                if (InvokeRequired)
-                    BeginInvoke(() => { if (_selectedAdvisor?.Id == id) ShowAdvisorDetail(id); });
-                else if (_selectedAdvisor?.Id == id)
-                    ShowAdvisorDetail(id);
+                // Guard against the form being disposed while the background refresh ran.
+                try
+                {
+                    if (!IsHandleCreated || IsDisposed) return;
+
+                    if (InvokeRequired)
+                        BeginInvoke(new Action(() =>
+                        {
+                            if (!IsHandleCreated || IsDisposed) return;
+                            if (_selectedAdvisor?.Id == id) ShowAdvisorDetail(id);
+                        }));
+                    else if (_selectedAdvisor?.Id == id)
+                        ShowAdvisorDetail(id);
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
             });
         }
     }
