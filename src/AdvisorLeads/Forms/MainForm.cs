@@ -22,6 +22,12 @@ public class MainForm : Form
     private WealthboxService? _wealthbox;
     private SecIapdEnrichmentService _iapd = null!;
     private ListRepository _listRepo = null!;
+    private AumAnalyticsService _aumAnalytics = null!;
+    private ChangeDetectionService _changeDetection = null!;
+    private FormAdvHistoricalService _formAdvHistorical = null!;
+    private EdgarSubmissionsService _edgarSubmissions = null!;
+    private EdgarSearchService _edgarSearch = null!;
+    private MaTargetScoringService _maScoring = null!;
     private string _dbPath = null!;
     private string _wealthboxToken = string.Empty;
 
@@ -91,6 +97,21 @@ public class MainForm : Form
         _iapd = new SecIapdEnrichmentService(_repo);
         _bgData.SetIapdService(_iapd);
         _listRepo = new ListRepository(dbPath);
+
+        // SEC EDGAR intelligence services
+        _aumAnalytics = new AumAnalyticsService(dbPath);
+        _changeDetection = new ChangeDetectionService(dbPath);
+        _formAdvHistorical = new FormAdvHistoricalService(dbPath);
+        _edgarSubmissions = new EdgarSubmissionsService(dbPath);
+        _edgarSearch = new EdgarSearchService(dbPath);
+        _maScoring = new MaTargetScoringService(dbPath, _aumAnalytics, _changeDetection, _formAdvHistorical, _edgarSubmissions, _edgarSearch);
+
+        _bgData.SetAumAnalyticsService(_aumAnalytics);
+        _bgData.SetChangeDetectionService(_changeDetection);
+        _bgData.SetMaScoringService(_maScoring);
+        _bgData.SetEdgarSubmissionsService(_edgarSubmissions);
+        _bgData.SetEdgarSearchService(_edgarSearch);
+        _bgData.SetFormAdvHistoricalService(_formAdvHistorical);
 
         // Load saved Wealthbox token
         _wealthboxToken = LoadSetting("WealthboxToken") ?? string.Empty;
@@ -172,6 +193,7 @@ public class MainForm : Form
         _firmContentSplit.Panel1.Controls.Add(firmListPanel);
 
         _firmDetailPanel = new FirmDetailPanel { Dock = DockStyle.Fill };
+        _firmDetailPanel.SetServices(_aumAnalytics, _changeDetection, _formAdvHistorical, _edgarSubmissions, _edgarSearch, _maScoring);
         _firmContentSplit.Panel2.Controls.Add(_firmDetailPanel);
 
         // Tab control
@@ -234,6 +256,8 @@ public class MainForm : Form
         // Data menu
         var dataMenu = new ToolStripMenuItem("&Data");
         var fetchItem = new ToolStripMenuItem("&Fetch New Data...", null, OnFetchData) { ShortcutKeys = Keys.Control | Keys.F };
+        var fetchEdgarItem = new ToolStripMenuItem("Fetch &EDGAR Filings", null, OnFetchEdgarFilings);
+        var fetchEdgarSearchItem = new ToolStripMenuItem("Run EDGAR M&&A Search", null, OnRunEdgarSearch);
         var refreshItem = new ToolStripMenuItem("&Refresh Selected", null, (_, _) =>
         {
             if (_selectedAdvisor != null) OnRefreshRequested(this, _selectedAdvisor);
@@ -241,7 +265,7 @@ public class MainForm : Form
         { ShortcutKeys = Keys.Control | Keys.R };
         var separatorItem = new ToolStripSeparator();
         var exitItem = new ToolStripMenuItem("E&xit", null, (_, _) => this.Close());
-        dataMenu.DropDownItems.AddRange(new ToolStripItem[] { fetchItem, refreshItem, separatorItem, exitItem });
+        dataMenu.DropDownItems.AddRange(new ToolStripItem[] { fetchItem, fetchEdgarItem, fetchEdgarSearchItem, new ToolStripSeparator(), refreshItem, separatorItem, exitItem });
 
         // CRM menu
         var crmMenu = new ToolStripMenuItem("&CRM");
@@ -262,7 +286,7 @@ public class MainForm : Form
         var helpMenu = new ToolStripMenuItem("&Help");
         var aboutItem = new ToolStripMenuItem("&About", null, (_, _) =>
             MessageBox.Show(
-                "AdvisorLeads v1.0\n\nRecruiter tool for sourcing financial advisors from FINRA BrokerCheck and SEC IAPD.\n\nData sources:\n• FINRA BrokerCheck: https://brokercheck.finra.org/\n• SEC IAPD: https://adviserinfo.sec.gov/",
+                "AdvisorLeads v1.0\n\nRecruiter tool for sourcing financial advisors from FINRA BrokerCheck, SEC IAPD, and SEC EDGAR.\n\nData sources:\n• FINRA BrokerCheck: https://brokercheck.finra.org/\n• SEC IAPD: https://adviserinfo.sec.gov/\n• SEC EDGAR: https://www.sec.gov/edgar/\n\nEDGAR features:\n• Filing history tracking\n• AUM growth analytics\n• Change detection alerts\n• M&A target scoring\n• Ownership analysis",
                 "About AdvisorLeads", MessageBoxButtons.OK, MessageBoxIcon.Information));
         helpMenu.DropDownItems.Add(aboutItem);
 
@@ -639,6 +663,40 @@ public class MainForm : Form
             }
             catch { /* non-critical */ }
         });
+
+        // Fetch EDGAR filing history for firms with SEC numbers (background)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var progress = new Progress<string>(msg => BeginInvoke(() => SetStatus(msg)));
+                await _bgData.RunEdgarFilingsFetchAsync(progress, CancellationToken.None, maxFirms: 50);
+            }
+            catch { /* non-critical */ }
+        });
+
+        // Run EDGAR M&A keyword search scan (background)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var progress = new Progress<string>(msg => BeginInvoke(() => SetStatus(msg)));
+                await _bgData.RunEdgarSearchScanAsync(progress, CancellationToken.None);
+            }
+            catch { /* non-critical */ }
+        });
+
+        // Import Form ADV historical data if due (quarterly check)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var progress = new Progress<string>(msg => BeginInvoke(() => SetStatus(msg)));
+                await _bgData.RunFormAdvHistoricalImportAsync(
+                    LoadSetting, SaveSetting, progress, CancellationToken.None);
+            }
+            catch { /* non-critical */ }
+        });
     }
 
     private void OnBackgroundDataUpdated()
@@ -729,6 +787,38 @@ public class MainForm : Form
             }
         };
         dlg.ShowDialog(this);
+    }
+
+    private async void OnFetchEdgarFilings(object? sender, EventArgs e)
+    {
+        SetStatus("Fetching EDGAR filing history...");
+        try
+        {
+            var progress = new Progress<string>(msg => SetStatus(msg));
+            var count = await Task.Run(() =>
+                _bgData.RunEdgarFilingsFetchAsync(progress, CancellationToken.None, maxFirms: 100));
+            SetStatus($"EDGAR filings: {count} new filings stored.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"EDGAR filings fetch failed: {ex.Message}");
+        }
+    }
+
+    private async void OnRunEdgarSearch(object? sender, EventArgs e)
+    {
+        SetStatus("Running EDGAR M&A keyword search...");
+        try
+        {
+            var progress = new Progress<string>(msg => SetStatus(msg));
+            var count = await Task.Run(() =>
+                _bgData.RunEdgarSearchScanAsync(progress, CancellationToken.None));
+            SetStatus($"EDGAR search: {count} new M&A signal results found.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"EDGAR search failed: {ex.Message}");
+        }
     }
 
     private async void OnRefreshRequested(object? sender, Advisor advisor)

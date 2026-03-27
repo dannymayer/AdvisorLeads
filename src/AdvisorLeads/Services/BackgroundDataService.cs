@@ -20,6 +20,9 @@ public class BackgroundDataService
     private ChangeDetectionService? _changeDetection;
     private AumAnalyticsService? _aumAnalytics;
     private MaTargetScoringService? _maScoring;
+    private EdgarSubmissionsService? _edgarSubmissions;
+    private EdgarSearchService? _edgarSearch;
+    private FormAdvHistoricalService? _formAdvHistorical;
     private CancellationTokenSource? _cts;
     private Task? _refreshTask;
 
@@ -39,6 +42,9 @@ public class BackgroundDataService
     public void SetChangeDetectionService(ChangeDetectionService s) => _changeDetection = s;
     public void SetAumAnalyticsService(AumAnalyticsService s) => _aumAnalytics = s;
     public void SetMaScoringService(MaTargetScoringService s) => _maScoring = s;
+    public void SetEdgarSubmissionsService(EdgarSubmissionsService s) => _edgarSubmissions = s;
+    public void SetEdgarSearchService(EdgarSearchService s) => _edgarSearch = s;
+    public void SetFormAdvHistoricalService(FormAdvHistoricalService s) => _formAdvHistorical = s;
 
     /// <summary>
     /// Returns true if the database has already been populated with advisor data.
@@ -201,6 +207,20 @@ public class BackgroundDataService
             var enriched = await EnrichAdvisorsWithDetailAsync(progress, token, maxToProcess: maxEnrich);
             if (enriched > 0)
                 progress.Report($"✓ Enriched {enriched} advisor records with full employment/qualification detail.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* continue on error */ }
+
+        // Fetch EDGAR filing history for firms with SEC numbers
+        try
+        {
+            if (_edgarSubmissions != null)
+            {
+                var filingCount = await _edgarSubmissions.FetchFilingsBatchAsync(
+                    activeOnly ? 50 : 25, progress, token);
+                if (filingCount > 0)
+                    progress.Report($"✓ Fetched {filingCount} new EDGAR filings.");
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch { /* continue on error */ }
@@ -392,5 +412,98 @@ public class BackgroundDataService
         progress?.Report($"✓ Marked {updated} firms as Broker Protocol members.");
         DataUpdated?.Invoke();
         return updated;
+    }
+
+    /// <summary>
+    /// Fetches EDGAR filing history for firms that have SEC numbers but no filings stored.
+    /// Runs as a background task; respects EDGAR rate limits (10 req/sec).
+    /// </summary>
+    public async Task<int> RunEdgarFilingsFetchAsync(
+        IProgress<string>? progress = null,
+        CancellationToken ct = default,
+        int maxFirms = 100)
+    {
+        if (_edgarSubmissions == null) return 0;
+        try
+        {
+            var count = await _edgarSubmissions.FetchFilingsBatchAsync(maxFirms, progress, ct);
+            if (count > 0) DataUpdated?.Invoke();
+            return count;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// Runs the EDGAR full-text M&A keyword search scan.
+    /// Stores results for firms matching M&A-related terms in their filings.
+    /// </summary>
+    public async Task<int> RunEdgarSearchScanAsync(
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        if (_edgarSearch == null) return 0;
+        try
+        {
+            var count = await _edgarSearch.RunMaSearchScanAsync(progress, ct);
+            if (count > 0) DataUpdated?.Invoke();
+            return count;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// Discovers and imports historical Form ADV data from the SEC FOIA website.
+    /// Only processes files that haven't been imported yet (tracked by settings).
+    /// </summary>
+    public async Task<int> RunFormAdvHistoricalImportAsync(
+        Func<string, string?> getSetting,
+        Action<string, string> saveSetting,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        if (_formAdvHistorical == null) return 0;
+
+        var lastImport = getSetting("FormAdvHistoricalLastImport");
+        if (lastImport != null && DateTime.TryParse(lastImport, out var last))
+        {
+            // Only re-import quarterly
+            if ((DateTime.UtcNow - last).TotalDays < 90) return 0;
+        }
+
+        try
+        {
+            progress?.Report("Discovering available Form ADV historical files...");
+            var urls = await _formAdvHistorical.DiscoverAvailableFilesAsync(ct);
+            if (urls.Count == 0)
+            {
+                progress?.Report("No Form ADV historical files found.");
+                return 0;
+            }
+
+            int totalFilings = 0;
+            int totalOwners = 0;
+
+            // Process only the most recent file to avoid overwhelming the DB
+            var url = urls.First();
+            progress?.Report($"Importing Form ADV historical data from {Path.GetFileName(new Uri(url).LocalPath)}...");
+            var (filings, owners) = await _formAdvHistorical.ImportHistoricalDataAsync(url, progress, ct);
+            totalFilings += filings;
+            totalOwners += owners;
+
+            saveSetting("FormAdvHistoricalLastImport", DateTime.UtcNow.ToString("O"));
+
+            if (totalFilings > 0 || totalOwners > 0)
+                DataUpdated?.Invoke();
+
+            return totalFilings + totalOwners;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            progress?.Report($"Form ADV historical import failed: {ex.Message}");
+            return 0;
+        }
     }
 }
