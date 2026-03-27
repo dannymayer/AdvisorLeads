@@ -1,320 +1,263 @@
-using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using AdvisorLeads.Models;
 
 namespace AdvisorLeads.Data;
 
-public class DatabaseContext : IDisposable
+public class DatabaseContext : DbContext
 {
-    private readonly string _connectionString;
-    private SqliteConnection? _connection;
-    private readonly SemaphoreSlim _dbLock = new SemaphoreSlim(1, 1);
+    private readonly string _dbPath;
 
     public DatabaseContext(string databasePath)
     {
-        _connectionString = $"Data Source={databasePath}";
+        _dbPath = databasePath;
     }
 
-    public SqliteConnection GetConnection()
+    public DbSet<Advisor> Advisors => Set<Advisor>();
+    public DbSet<Firm> Firms => Set<Firm>();
+    public DbSet<EmploymentHistory> EmploymentHistory => Set<EmploymentHistory>();
+    public DbSet<Disclosure> Disclosures => Set<Disclosure>();
+    public DbSet<Qualification> Qualifications => Set<Qualification>();
+    public DbSet<AdvisorList> AdvisorLists => Set<AdvisorList>();
+    public DbSet<AdvisorListMember> AdvisorListMembers => Set<AdvisorListMember>();
+    public DbSet<EdgarSearchResult> EdgarSearchResults => Set<EdgarSearchResult>();
+    public DbSet<FirmFiling> FirmFilings => Set<FirmFiling>();
+    public DbSet<FirmOwnership> FirmOwnership => Set<FirmOwnership>();
+    public DbSet<FormAdvFiling> FormAdvFilings => Set<FormAdvFiling>();
+    public DbSet<FirmFilingEvent> FirmFilingEvents => Set<FirmFilingEvent>();
+    public DbSet<FirmAumHistory> FirmAumHistory => Set<FirmAumHistory>();
+
+    protected override void OnConfiguring(DbContextOptionsBuilder options)
     {
-        if (_connection == null || _connection.State != System.Data.ConnectionState.Open)
-        {
-            _connection = new SqliteConnection(_connectionString);
-            _connection.Open();
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = @"
-                PRAGMA journal_mode=WAL;
-                PRAGMA foreign_keys=ON;
-                PRAGMA busy_timeout=5000;
-                PRAGMA cache_size=-8000;
-                PRAGMA temp_store=MEMORY;
-                PRAGMA mmap_size=268435456;";
-            cmd.ExecuteNonQuery();
-        }
-        return _connection;
+        options.UseSqlite($"Data Source={_dbPath}");
     }
 
+    protected override void OnModelCreating(ModelBuilder m)
+    {
+        // ── Firms ──
+        m.Entity<Firm>(e =>
+        {
+            e.ToTable("Firms");
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => f.CrdNumber).IsUnique();
+            e.HasIndex(f => new { f.State, f.RegistrationStatus, f.Name });
+
+            e.Property(f => f.IsRegisteredWithSec).HasDefaultValue(false);
+            e.Property(f => f.IsRegisteredWithFinra).HasDefaultValue(false);
+            e.Property(f => f.IsExcluded).HasDefaultValue(false);
+            e.Property(f => f.BrokerProtocolMember).HasDefaultValue(false);
+            e.Property(f => f.CompensationFeeOnly).HasDefaultValue(false);
+            e.Property(f => f.CompensationCommission).HasDefaultValue(false);
+            e.Property(f => f.CompensationHourly).HasDefaultValue(false);
+            e.Property(f => f.CompensationPerformanceBased).HasDefaultValue(false);
+            e.Property(f => f.HasCustody).HasDefaultValue(false);
+            e.Property(f => f.HasDiscretionaryAuthority).HasDefaultValue(false);
+            e.Property(f => f.IsBrokerDealer).HasDefaultValue(false);
+            e.Property(f => f.IsInsuranceCompany).HasDefaultValue(false);
+            e.Property(f => f.CreatedAt).HasDefaultValueSql("datetime('now')");
+            e.Property(f => f.UpdatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── Advisors ──
+        m.Entity<Advisor>(e =>
+        {
+            e.ToTable("Advisors");
+            e.HasKey(a => a.Id);
+            e.HasIndex(a => a.CrdNumber).IsUnique();
+            e.HasIndex(a => a.LastName);
+            e.HasIndex(a => a.State);
+            e.HasIndex(a => a.CurrentFirmCrd);
+            e.HasIndex(a => a.RecordType);
+            e.HasIndex(a => a.Source);
+            e.HasIndex(a => new { a.State, a.RecordType, a.RegistrationStatus, a.LastName });
+
+            e.Property(a => a.HasDisclosures).HasDefaultValue(false);
+            e.Property(a => a.DisclosureCount).HasDefaultValue(0);
+            e.Property(a => a.IsExcluded).HasDefaultValue(false);
+            e.Property(a => a.IsImportedToCrm).HasDefaultValue(false);
+            e.Property(a => a.CreatedAt).HasDefaultValueSql("datetime('now')");
+            e.Property(a => a.UpdatedAt).HasDefaultValueSql("datetime('now')");
+
+            e.Ignore(a => a.FullName);
+
+            e.HasOne<Firm>().WithMany()
+                .HasForeignKey(a => a.CurrentFirmId)
+                .IsRequired(false);
+
+            e.HasMany(a => a.EmploymentHistory).WithOne()
+                .HasForeignKey(eh => eh.AdvisorId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasMany(a => a.Disclosures).WithOne()
+                .HasForeignKey(d => d.AdvisorId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasMany(a => a.QualificationList).WithOne()
+                .HasForeignKey(q => q.AdvisorId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── EmploymentHistory ──
+        m.Entity<EmploymentHistory>(e =>
+        {
+            e.ToTable("EmploymentHistory");
+            e.HasKey(eh => eh.Id);
+            e.HasIndex(eh => eh.AdvisorId);
+            e.Ignore(eh => eh.IsCurrent);
+        });
+
+        // ── Disclosures ──
+        m.Entity<Disclosure>(e =>
+        {
+            e.ToTable("Disclosures");
+            e.HasKey(d => d.Id);
+            e.HasIndex(d => d.AdvisorId);
+            e.Property(d => d.Type).HasColumnName("Type");
+        });
+
+        // ── Qualifications ──
+        m.Entity<Qualification>(e =>
+        {
+            e.ToTable("Qualifications");
+            e.HasKey(q => q.Id);
+            e.HasIndex(q => q.AdvisorId);
+        });
+
+        // ── AdvisorLists ──
+        m.Entity<AdvisorList>(e =>
+        {
+            e.ToTable("AdvisorLists");
+            e.HasKey(l => l.Id);
+            e.Ignore(l => l.MemberCount);
+            e.Property(l => l.CreatedAt).HasDefaultValueSql("datetime('now')");
+            e.Property(l => l.UpdatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── AdvisorListMembers ──
+        m.Entity<AdvisorListMember>(e =>
+        {
+            e.ToTable("AdvisorListMembers");
+            e.HasKey(lm => lm.Id);
+            e.HasIndex(lm => lm.ListId);
+            e.HasIndex(lm => lm.AdvisorId);
+            e.HasIndex(lm => new { lm.ListId, lm.AdvisorId }).IsUnique();
+            e.Property(lm => lm.AddedAt).HasDefaultValueSql("datetime('now')");
+
+            e.HasOne<AdvisorList>().WithMany()
+                .HasForeignKey(lm => lm.ListId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasOne(lm => lm.Advisor).WithMany()
+                .HasForeignKey(lm => lm.AdvisorId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── FirmOwnership ──
+        m.Entity<FirmOwnership>(e =>
+        {
+            e.ToTable("FirmOwnership");
+            e.HasKey(o => o.Id);
+            e.HasIndex(o => o.FirmCrd);
+            e.HasIndex(o => new { o.FirmCrd, o.FilingDate });
+            e.Property(o => o.IsDirectOwner).HasDefaultValue(true);
+            e.Property(o => o.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── FormAdvFilings ──
+        m.Entity<FormAdvFiling>(e =>
+        {
+            e.ToTable("FormAdvFilings");
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => f.FirmCrd);
+            e.HasIndex(f => new { f.FirmCrd, f.FilingDate });
+            e.HasIndex(f => f.FilingDate);
+            e.Property(f => f.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── FirmFilingEvents ──
+        m.Entity<FirmFilingEvent>(e =>
+        {
+            e.ToTable("FirmFilingEvents");
+            e.HasKey(ev => ev.Id);
+            e.HasIndex(ev => ev.FirmCrd);
+            e.HasIndex(ev => ev.EventType);
+            e.HasIndex(ev => ev.EventDate);
+            e.HasIndex(ev => ev.Severity);
+            e.HasIndex(ev => new { ev.FirmCrd, ev.EventDate });
+            e.Property(ev => ev.IsReviewed).HasDefaultValue(false);
+            e.Property(ev => ev.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── EdgarSearchResults ──
+        m.Entity<EdgarSearchResult>(e =>
+        {
+            e.ToTable("EdgarSearchResults");
+            e.HasKey(r => r.Id);
+            e.HasIndex(r => r.FirmCrd);
+            e.HasIndex(r => r.AccessionNumber);
+            e.HasIndex(r => new { r.AccessionNumber, r.SearchQuery });
+            e.HasIndex(r => r.Category);
+            e.Property(r => r.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── FirmFilings ──
+        m.Entity<FirmFiling>(e =>
+        {
+            e.ToTable("FirmFilings");
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => f.FirmCrd);
+            e.HasIndex(f => f.AccessionNumber).IsUnique();
+            e.HasIndex(f => new { f.FirmCrd, f.FilingDate });
+            e.Property(f => f.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+
+        // ── FirmAumHistory ──
+        m.Entity<FirmAumHistory>(e =>
+        {
+            e.ToTable("FirmAumHistory");
+            e.HasKey(h => h.Id);
+            e.HasIndex(h => h.FirmCrd);
+            e.HasIndex(h => new { h.FirmCrd, h.SnapshotDate }).IsUnique();
+            e.HasIndex(h => h.SnapshotDate);
+            e.Property(h => h.CreatedAt).HasDefaultValueSql("datetime('now')");
+        });
+    }
+
+    /// <summary>
+    /// Creates the database and all tables/indexes if they don't exist.
+    /// Call once at startup.
+    /// </summary>
     public void InitializeDatabase()
     {
-        var conn = GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            CREATE TABLE IF NOT EXISTS Firms (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                CrdNumber TEXT UNIQUE,
-                Name TEXT NOT NULL,
-                Address TEXT,
-                City TEXT,
-                State TEXT,
-                ZipCode TEXT,
-                Phone TEXT,
-                Website TEXT,
-                BusinessType TEXT,
-                IsRegisteredWithSec INTEGER DEFAULT 0,
-                IsRegisteredWithFinra INTEGER DEFAULT 0,
-                NumberOfAdvisors INTEGER,
-                RegistrationDate TEXT,
-                Source TEXT,
-                RecordType TEXT,
-                IsExcluded INTEGER DEFAULT 0,
-                CreatedAt TEXT DEFAULT (datetime('now')),
-                UpdatedAt TEXT DEFAULT (datetime('now')),
-                SECNumber TEXT,
-                SECRegion TEXT,
-                LegalName TEXT,
-                FaxPhone TEXT,
-                MailingAddress TEXT,
-                RegistrationStatus TEXT,
-                AumDescription TEXT,
-                StateOfOrganization TEXT
-            );
+        Database.EnsureCreated();
 
-            CREATE TABLE IF NOT EXISTS Advisors (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                CrdNumber TEXT UNIQUE,
-                IapdNumber TEXT,
-                FirstName TEXT NOT NULL,
-                LastName TEXT NOT NULL,
-                MiddleName TEXT,
-                Title TEXT,
-                Email TEXT,
-                Phone TEXT,
-                City TEXT,
-                State TEXT,
-                ZipCode TEXT,
-                Licenses TEXT,
-                Qualifications TEXT,
-                CurrentFirmName TEXT,
-                CurrentFirmCrd TEXT,
-                CurrentFirmId INTEGER,
-                RegistrationStatus TEXT,
-                RegistrationDate TEXT,
-                YearsOfExperience INTEGER,
-                HasDisclosures INTEGER DEFAULT 0,
-                DisclosureCount INTEGER DEFAULT 0,
-                Source TEXT,
-                RecordType TEXT,
-                IsExcluded INTEGER DEFAULT 0,
-                ExclusionReason TEXT,
-                IsImportedToCrm INTEGER DEFAULT 0,
-                CrmId TEXT,
-                CreatedAt TEXT DEFAULT (datetime('now')),
-                UpdatedAt TEXT DEFAULT (datetime('now')),
-                Suffix TEXT,
-                IapdLink TEXT,
-                RegAuthorities TEXT,
-                DisclosureFlags TEXT,
-                FOREIGN KEY (CurrentFirmId) REFERENCES Firms(Id)
-            );
-
-            CREATE TABLE IF NOT EXISTS EmploymentHistory (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                AdvisorId INTEGER NOT NULL,
-                FirmName TEXT NOT NULL,
-                FirmCrd TEXT,
-                StartDate TEXT,
-                EndDate TEXT,
-                Position TEXT,
-                FOREIGN KEY (AdvisorId) REFERENCES Advisors(Id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS Disclosures (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                AdvisorId INTEGER NOT NULL,
-                Type TEXT NOT NULL,
-                Description TEXT,
-                Date TEXT,
-                Resolution TEXT,
-                Sanctions TEXT,
-                Source TEXT,
-                FOREIGN KEY (AdvisorId) REFERENCES Advisors(Id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS Qualifications (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                AdvisorId INTEGER NOT NULL,
-                Name TEXT NOT NULL,
-                Code TEXT,
-                Date TEXT,
-                Status TEXT,
-                FOREIGN KEY (AdvisorId) REFERENCES Advisors(Id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_advisors_lastname ON Advisors(LastName);
-            CREATE INDEX IF NOT EXISTS idx_advisors_state ON Advisors(State);
-            CREATE INDEX IF NOT EXISTS idx_advisors_firm ON Advisors(CurrentFirmCrd);
-            CREATE INDEX IF NOT EXISTS idx_advisors_crd ON Advisors(CrdNumber);
-
-            CREATE TABLE IF NOT EXISTS AdvisorLists (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                Name TEXT NOT NULL,
-                Description TEXT,
-                CreatedAt TEXT DEFAULT (datetime('now')),
-                UpdatedAt TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS AdvisorListMembers (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ListId INTEGER NOT NULL,
-                AdvisorId INTEGER NOT NULL,
-                Notes TEXT,
-                AddedAt TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (ListId) REFERENCES AdvisorLists(Id) ON DELETE CASCADE,
-                FOREIGN KEY (AdvisorId) REFERENCES Advisors(Id) ON DELETE CASCADE,
-                UNIQUE(ListId, AdvisorId)
-            );
-            CREATE INDEX IF NOT EXISTS idx_listmembers_list ON AdvisorListMembers(ListId);
-            CREATE INDEX IF NOT EXISTS idx_listmembers_advisor ON AdvisorListMembers(AdvisorId);
-        ";
-        cmd.ExecuteNonQuery();
-
-        MigrateDatabase();
-    }
-
-    // Adds columns introduced after initial release to existing databases,
-    // then creates any indices that depend on those new columns.
-    private void MigrateDatabase()
-    {
-        var conn = GetConnection();
-        TryAddColumn(conn, "Advisors", "RecordType", "TEXT");
-        TryAddColumn(conn, "Firms", "RecordType", "TEXT");
-
-        // Advisor new columns
-        TryAddColumn(conn, "Advisors", "Suffix", "TEXT");
-        TryAddColumn(conn, "Advisors", "IapdLink", "TEXT");
-        TryAddColumn(conn, "Advisors", "RegAuthorities", "TEXT");
-        TryAddColumn(conn, "Advisors", "DisclosureFlags", "TEXT");
-        TryAddColumn(conn, "Advisors", "OtherNames", "TEXT");
-
-        // EmploymentHistory new columns
-        TryAddColumn(conn, "EmploymentHistory", "Street", "TEXT");
-
-        // Firm new columns
-        TryAddColumn(conn, "Firms", "SECNumber", "TEXT");
-        TryAddColumn(conn, "Firms", "SECRegion", "TEXT");
-        TryAddColumn(conn, "Firms", "LegalName", "TEXT");
-        TryAddColumn(conn, "Firms", "FaxPhone", "TEXT");
-        TryAddColumn(conn, "Firms", "MailingAddress", "TEXT");
-        TryAddColumn(conn, "Firms", "RegistrationStatus", "TEXT");
-        TryAddColumn(conn, "Firms", "AumDescription", "TEXT");
-        TryAddColumn(conn, "Firms", "StateOfOrganization", "TEXT");
-        TryAddColumn(conn, "Firms", "Country", "TEXT");
-        TryAddColumn(conn, "Firms", "NumberOfEmployees", "INTEGER");
-        TryAddColumn(conn, "Firms", "LatestFilingDate", "TEXT");
-        TryAddColumn(conn, "Firms", "RegulatoryAum",        "REAL");
-        TryAddColumn(conn, "Firms", "RegulatoryAumNonDiscretionary", "REAL");
-        TryAddColumn(conn, "Firms", "NumClients",            "INTEGER");
-        TryAddColumn(conn, "Firms", "BrokerProtocolMember",  "INTEGER DEFAULT 0");
-        TryAddColumn(conn, "Firms", "BrokerProtocolUpdatedAt", "TEXT");
-
-        // Create the RecordType index now that the column is guaranteed to exist.
-        TryCreateIndex(conn, "idx_advisors_recordtype", "CREATE INDEX IF NOT EXISTS idx_advisors_recordtype ON Advisors(RecordType)");
-
-        // Composite covering index for the most common recruiter query:
-        // State + RecordType + RegistrationStatus + LastName
-        TryCreateIndex(conn, "idx_adv_state_type_status_name",
-            "CREATE INDEX IF NOT EXISTS idx_adv_state_type_status_name ON Advisors(State, RecordType, RegistrationStatus, LastName) WHERE IsExcluded = 0");
-
-        // Source filter (normalised searches benefit from this)
-        TryCreateIndex(conn, "idx_adv_source",
-            "CREATE INDEX IF NOT EXISTS idx_adv_source ON Advisors(Source)");
-
-        // Partial index for advisors with disclosures (low cardinality, high selectivity)
-        TryCreateIndex(conn, "idx_adv_disclosures",
-            "CREATE INDEX IF NOT EXISTS idx_adv_disclosures ON Advisors(HasDisclosures) WHERE HasDisclosures = 1");
-
-        // Partial index for advisors not yet imported to CRM
-        TryCreateIndex(conn, "idx_adv_crm",
-            "CREATE INDEX IF NOT EXISTS idx_adv_crm ON Advisors(IsImportedToCrm) WHERE IsImportedToCrm = 0");
-
-        // Covering index for active-only queries (skips excluded rows at index level)
-        TryCreateIndex(conn, "idx_adv_active_state_type",
-            "CREATE INDEX IF NOT EXISTS idx_adv_active_state_type ON Advisors(State, RecordType, LastName) WHERE IsExcluded = 0");
-
-        // Related data lookup indices (used by N+1 fix and detail view)
-        TryCreateIndex(conn, "idx_emp_advisor",
-            "CREATE INDEX IF NOT EXISTS idx_emp_advisor ON EmploymentHistory(AdvisorId)");
-        TryCreateIndex(conn, "idx_disc_advisor",
-            "CREATE INDEX IF NOT EXISTS idx_disc_advisor ON Disclosures(AdvisorId)");
-        TryCreateIndex(conn, "idx_qual_advisor",
-            "CREATE INDEX IF NOT EXISTS idx_qual_advisor ON Qualifications(AdvisorId)");
-
-        // Firm lookup index
-        TryCreateIndex(conn, "idx_firms_state_status",
-            "CREATE INDEX IF NOT EXISTS idx_firms_state_status ON Firms(State, RegistrationStatus, Name)");
-
-        // List member lookups
-        TryCreateIndex(conn, "idx_listmembers_list",
-            "CREATE INDEX IF NOT EXISTS idx_listmembers_list ON AdvisorListMembers(ListId)");
-        TryCreateIndex(conn, "idx_listmembers_advisor",
-            "CREATE INDEX IF NOT EXISTS idx_listmembers_advisor ON AdvisorListMembers(AdvisorId)");
-    }
-
-    private static void TryAddColumn(SqliteConnection conn, string table, string column, string type)
-    {
-        try
-        {
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {type}";
-            cmd.ExecuteNonQuery();
-        }
-        catch { /* column already exists — ignore */ }
-    }
-
-    private static void TryCreateIndex(SqliteConnection conn, string indexName, string createSql)
-    {
-        try
-        {
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = createSql;
-            cmd.ExecuteNonQuery();
-        }
-        catch { /* index already exists or column missing — ignore */ }
-    }
-
-    public void Dispose()
-    {
-        _connection?.Dispose();
-        _dbLock.Dispose();
-    }
-
-    /// <summary>
-    /// Executes a synchronous database operation under the DB lock, preventing
-    /// concurrent access from the UI thread and background service threads.
-    /// </summary>
-    public T Execute<T>(Func<SqliteConnection, T> work)
-    {
-        _dbLock.Wait();
-        try { return work(GetConnection()); }
-        finally { _dbLock.Release(); }
-    }
-
-    /// <summary>
-    /// Async version — awaits the lock so the calling thread is not blocked.
-    /// </summary>
-    public async Task<T> ExecuteAsync<T>(Func<SqliteConnection, T> work)
-    {
-        await _dbLock.WaitAsync().ConfigureAwait(false);
-        try { return work(GetConnection()); }
-        finally { _dbLock.Release(); }
+        // Apply SQLite performance pragmas
+        Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
+        Database.ExecuteSqlRaw("PRAGMA foreign_keys=ON");
+        Database.ExecuteSqlRaw("PRAGMA busy_timeout=5000");
+        Database.ExecuteSqlRaw("PRAGMA cache_size=-8000");
+        Database.ExecuteSqlRaw("PRAGMA temp_store=MEMORY");
+        Database.ExecuteSqlRaw("PRAGMA mmap_size=268435456");
     }
 
     /// <summary>
     /// Deletes all rows from every table and resets autoincrement counters.
-    /// Used by the debug reset flow.
     /// </summary>
     public void ClearAllData()
     {
-        var conn = GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            DELETE FROM Qualifications;
-            DELETE FROM Disclosures;
-            DELETE FROM EmploymentHistory;
-            DELETE FROM Advisors;
-            DELETE FROM Firms;
-            DELETE FROM AdvisorListMembers;
-            DELETE FROM AdvisorLists;
-            DELETE FROM sqlite_sequence WHERE name IN ('AdvisorListMembers','AdvisorLists','Qualifications','Disclosures','EmploymentHistory','Advisors','Firms');
-        ";
-        cmd.ExecuteNonQuery();
+        Qualifications.ExecuteDelete();
+        Disclosures.ExecuteDelete();
+        EmploymentHistory.ExecuteDelete();
+        AdvisorListMembers.ExecuteDelete();
+        AdvisorLists.ExecuteDelete();
+        Advisors.ExecuteDelete();
+        EdgarSearchResults.ExecuteDelete();
+        FirmFilingEvents.ExecuteDelete();
+        FirmFilings.ExecuteDelete();
+        FirmAumHistory.ExecuteDelete();
+        Firms.ExecuteDelete();
+        FirmOwnership.ExecuteDelete();
+        FormAdvFilings.ExecuteDelete();
+        Database.ExecuteSqlRaw(
+            "DELETE FROM sqlite_sequence WHERE name IN ('EdgarSearchResults','FirmFilings','FirmFilingEvents','AdvisorListMembers','AdvisorLists','Qualifications','Disclosures','EmploymentHistory','Advisors','Firms','FirmOwnership','FormAdvFilings','FirmAumHistory')");
     }
 }

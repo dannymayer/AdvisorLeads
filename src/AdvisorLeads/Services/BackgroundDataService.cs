@@ -17,6 +17,9 @@ public class BackgroundDataService
     private SecMonthlyFirmService? _secMonthly;
     private BrokerProtocolService? _brokerProtocol;
     private SecIapdEnrichmentService? _secIapd;
+    private ChangeDetectionService? _changeDetection;
+    private AumAnalyticsService? _aumAnalytics;
+    private MaTargetScoringService? _maScoring;
     private CancellationTokenSource? _cts;
     private Task? _refreshTask;
 
@@ -33,6 +36,9 @@ public class BackgroundDataService
     public void SetSecMonthlyService(SecMonthlyFirmService s) => _secMonthly = s;
     public void SetBrokerProtocolService(BrokerProtocolService s) => _brokerProtocol = s;
     public void SetIapdService(SecIapdEnrichmentService s) => _secIapd = s;
+    public void SetChangeDetectionService(ChangeDetectionService s) => _changeDetection = s;
+    public void SetAumAnalyticsService(AumAnalyticsService s) => _aumAnalytics = s;
+    public void SetMaScoringService(MaTargetScoringService s) => _maScoring = s;
 
     /// <summary>
     /// Returns true if the database has already been populated with advisor data.
@@ -285,7 +291,23 @@ public class BackgroundDataService
 
         if (firms.Count > 0)
         {
+            // Detect changes before upserting (needs old values for comparison)
+            if (_changeDetection != null && firms.Count > 0)
+            {
+                var eventCount = _changeDetection.DetectChanges(firms, progress);
+                if (eventCount > 0)
+                    progress?.Report($"SEC Monthly: Detected {eventCount} significant firm changes.");
+            }
+
             _repo.UpsertFirmBatch(firms, progress);
+
+            // Snapshot AUM data for trend tracking
+            if (_aumAnalytics != null)
+            {
+                var snapshotCount = _aumAnalytics.SnapshotFirmData(firms, DateTime.Now);
+                progress?.Report($"SEC Monthly: Recorded {snapshotCount:N0} AUM snapshots.");
+            }
+
             saveSetting("SecFirmLastMonth", currentMonth);
             progress?.Report($"SEC Monthly: Updated {firms.Count:N0} firm records.");
             return firms.Count;

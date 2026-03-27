@@ -11,7 +11,6 @@ public class MainForm : Form
     private const int ContentSplitDefaultDistance = 420;
 
     // Services
-    private DatabaseContext _db = null!;
     private AdvisorRepository _repo = null!;
     private FinraService _finra = null!;
     private SecIapdService _secStub = null!;
@@ -23,12 +22,13 @@ public class MainForm : Form
     private WealthboxService? _wealthbox;
     private SecIapdEnrichmentService _iapd = null!;
     private ListRepository _listRepo = null!;
+    private string _dbPath = null!;
     private string _wealthboxToken = string.Empty;
 
     // UI components
     private FilterPanel _filterPanel = null!;
     private FirmFilterPanel _firmFilterPanel = null!;
-    private ListView _listView = null!;
+    private FlowLayoutPanel _cardContainer = null!;
     private AdvisorDetailCard _detailCard = null!;
     private SplitContainer _mainSplit = null!;
     private SplitContainer _contentSplit = null!;
@@ -46,8 +46,6 @@ public class MainForm : Form
     private Advisor? _selectedAdvisor;
     private List<Firm> _currentFirms = new();
     private Firm? _selectedFirm;
-    private ListViewItem[]? _lvCache;
-    private int _lvCacheStart = 0;
     private int _totalAdvisorCount = 0;
     private int _currentPage = 1;
     // Tracks CRDs for which on-demand disclosure enrichment has already been triggered
@@ -73,10 +71,13 @@ public class MainForm : Form
             "AdvisorLeads");
         Directory.CreateDirectory(appData);
         var dbPath = Path.Combine(appData, "advisorleads.db");
+        _dbPath = dbPath;
 
-        _db = new DatabaseContext(dbPath);
-        _db.InitializeDatabase();
-        _repo = new AdvisorRepository(_db);
+        using (var initDb = new DatabaseContext(dbPath))
+        {
+            initDb.InitializeDatabase();
+        }
+        _repo = new AdvisorRepository(dbPath);
         _finra = new FinraService();
         _secStub = new SecIapdService();
         _sec = new SecCompilationService();
@@ -89,7 +90,7 @@ public class MainForm : Form
         _bgData.SetBrokerProtocolService(_brokerProtocolService);
         _iapd = new SecIapdEnrichmentService(_repo);
         _bgData.SetIapdService(_iapd);
-        _listRepo = new ListRepository(_db);
+        _listRepo = new ListRepository(dbPath);
 
         // Load saved Wealthbox token
         _wealthboxToken = LoadSetting("WealthboxToken") ?? string.Empty;
@@ -140,9 +141,9 @@ public class MainForm : Form
             Orientation = Orientation.Vertical
         };
 
-        // Results list (individuals)
-        BuildListView();
-        _contentSplit.Panel1.Controls.Add(_listView);
+        // Results card grid (individuals)
+        BuildCardContainer();
+        _contentSplit.Panel1.Controls.Add(_cardContainer);
 
         // Detail card (individuals)
         _detailCard = new AdvisorDetailCard { Dock = DockStyle.Fill };
@@ -284,39 +285,24 @@ public class MainForm : Form
         this.MainMenuStrip = _menuStrip;
     }
 
-    private void BuildListView()
+    private void BuildCardContainer()
     {
-        _listView = new ListView
+        _cardContainer = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            View = View.Details,
-            FullRowSelect = true,
-            GridLines = true,
-            MultiSelect = false,
-            VirtualMode = true,
-            Font = new Font("Segoe UI", 9),
-            BorderStyle = BorderStyle.None
+            AutoScroll = false,
+            WrapContents = true,
+            BackColor = Color.FromArgb(240, 242, 245),
+            Padding = new Padding(6)
         };
+        _cardContainer.Resize += (_, _) => OnCardContainerResized();
 
-        _listView.Columns.Add("Name", 180);
-        _listView.Columns.Add("Type", 95);
-        _listView.Columns.Add("CRD", 70);
-        _listView.Columns.Add("Firm", 175);
-        _listView.Columns.Add("State", 50);
-        _listView.Columns.Add("City", 65);
-        _listView.Columns.Add("Status", 90);
-        _listView.Columns.Add("Licenses", 100);
-        _listView.Columns.Add("Exp.", 50);
-        _listView.Columns.Add("Disclosures", 85);
-        _listView.Columns.Add("Source", 70);
-        _listView.Columns.Add("Updated", 90);
+        // Context menu (attached to individual cards on creation)
+        _cardContainer.Tag = BuildCardContextMenu();
+    }
 
-        _listView.RetrieveVirtualItem += OnRetrieveVirtualItem;
-        _listView.CacheVirtualItems += OnCacheVirtualItems;
-        _listView.SelectedIndexChanged += OnListViewSelectionChanged;
-        _listView.ColumnClick += OnColumnClick;
-
-        // Context menu
+    private ContextMenuStrip BuildCardContextMenu()
+    {
         var contextMenu = new ContextMenuStrip();
         contextMenu.Items.Add("View Details", null, (_, _) => { if (_selectedAdvisor != null) ShowAdvisorDetail(_selectedAdvisor.Id); });
         contextMenu.Items.Add("Refresh Data", null, (_, _) => { if (_selectedAdvisor != null) OnRefreshRequested(this, _selectedAdvisor); });
@@ -326,7 +312,80 @@ public class MainForm : Form
         contextMenu.Items.Add("-");
         contextMenu.Items.Add("Exclude from Results", null, (_, _) => { if (_selectedAdvisor != null) OnExcludeRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("Restore to Results", null, (_, _) => { if (_selectedAdvisor != null) OnRestoreRequested(this, _selectedAdvisor); });
-        _listView.ContextMenuStrip = contextMenu;
+        return contextMenu;
+    }
+
+    private int CalculateCardsPerPage()
+    {
+        int w = _cardContainer.ClientSize.Width - _cardContainer.Padding.Horizontal;
+        int h = _cardContainer.ClientSize.Height - _cardContainer.Padding.Vertical;
+        if (w < 100 || h < 100) return 6;
+
+        const int cardW = 270;
+        const int cardH = 135;
+        const int margin = 12; // 6px margin on each side
+
+        int cols = Math.Max(1, w / (cardW + margin));
+        int rows = Math.Max(1, h / (cardH + margin));
+        return cols * rows;
+    }
+
+    private void OnCardContainerResized()
+    {
+        int newPageSize = CalculateCardsPerPage();
+        var filter = _filterPanel.GetFilter();
+        if (filter.PageSize != newPageSize)
+        {
+            filter.PageSize = newPageSize;
+            LoadAdvisors();
+        }
+        else
+        {
+            LayoutCards();
+        }
+    }
+
+    private void LayoutCards()
+    {
+        int w = _cardContainer.ClientSize.Width - _cardContainer.Padding.Horizontal;
+        if (w < 100) return;
+
+        const int cardMinW = 270;
+        const int margin = 12;
+        int cols = Math.Max(1, w / (cardMinW + margin));
+        int cardW = (w - margin * cols) / cols;
+
+        foreach (Control c in _cardContainer.Controls)
+        {
+            if (c is AdvisorCard card)
+                card.Size = new Size(cardW, 135);
+        }
+    }
+
+    private void RenderCards()
+    {
+        _cardContainer.SuspendLayout();
+        _cardContainer.Controls.Clear();
+
+        int w = _cardContainer.ClientSize.Width - _cardContainer.Padding.Horizontal;
+        const int cardMinW = 270;
+        const int margin = 12;
+        int cols = Math.Max(1, w / (cardMinW + margin));
+        int cardW = cols > 0 ? (w - margin * cols) / cols : cardMinW;
+
+        var ctx = _cardContainer.Tag as ContextMenuStrip;
+
+        foreach (var advisor in _currentAdvisors)
+        {
+            var card = new AdvisorCard();
+            card.Size = new Size(cardW, 135);
+            card.SetAdvisor(advisor);
+            card.ContextMenuStrip = ctx;
+            card.CardClicked += OnAdvisorCardClicked;
+            _cardContainer.Controls.Add(card);
+        }
+
+        _cardContainer.ResumeLayout(true);
     }
 
     private void BuildFirmListView()
@@ -417,6 +476,7 @@ public class MainForm : Form
         {
             var filter = _filterPanel.GetFilter();
             filter.PageNumber = page;
+            filter.PageSize = CalculateCardsPerPage();
 
             List<Advisor> advisors = null!;
             int total = 0;
@@ -432,16 +492,12 @@ public class MainForm : Form
             _totalAdvisorCount = total;
             _currentPage = page;
 
-            _lvCache = null;
-            _lvCacheStart = 0;
-            _listView.VirtualListSize = 0;
-            _listView.VirtualListSize = _currentAdvisors.Count;
-            _listView.Invalidate();
+            RenderCards();
 
             UpdateAdvisorCountLabel(filter);
             SetStatus("Ready");
 
-            int totalPages = (int)Math.Ceiling((double)total / filter.PageSize);
+            int totalPages = filter.PageSize > 0 ? (int)Math.Ceiling((double)total / filter.PageSize) : 1;
             _btnPrevPage.Enabled = page > 1;
             _btnNextPage.Enabled = page < totalPages;
         }
@@ -477,75 +533,20 @@ public class MainForm : Form
         }
     }
 
-    private ListViewItem BuildListViewItem(Advisor advisor)
+    private void OnAdvisorCardClicked(object? sender, EventArgs e)
     {
-        var item = new ListViewItem(advisor.FullName);
-        item.SubItems.Add(advisor.RecordType ?? "");
-        item.SubItems.Add(advisor.CrdNumber ?? "");
-        item.SubItems.Add(advisor.CurrentFirmName ?? "");
-        item.SubItems.Add(advisor.State ?? "");
-        item.SubItems.Add(advisor.City ?? "");
-        item.SubItems.Add(advisor.RegistrationStatus ?? "");
-        item.SubItems.Add(advisor.Licenses ?? "");
-        item.SubItems.Add(advisor.YearsOfExperience.HasValue ? advisor.YearsOfExperience.Value.ToString() : "");
-        item.SubItems.Add(advisor.HasDisclosures ? $"Yes ({advisor.DisclosureCount})" : "No");
-        item.SubItems.Add(advisor.Source ?? "");
-        item.SubItems.Add(advisor.UpdatedAt.ToString("yyyy-MM-dd"));
-        item.Tag = advisor.Id;
+        if (sender is not AdvisorCard clickedCard || clickedCard.Advisor == null) return;
 
-        if (advisor.IsExcluded)
+        // Deselect previous
+        foreach (Control c in _cardContainer.Controls)
         {
-            item.ForeColor = Color.Gray;
-            item.Font = new Font("Segoe UI", 9, FontStyle.Strikeout);
+            if (c is AdvisorCard card)
+                card.SetSelected(false);
         }
-        else if (advisor.HasDisclosures)
-        {
-            item.BackColor = Color.FromArgb(255, 250, 240);
-        }
-        else if (!advisor.IsImportedToCrm
-            && advisor.RegistrationStatus == "Active"
-            && advisor.RecordType == "Investment Advisor Representative")
-        {
-            item.BackColor = Color.FromArgb(240, 255, 240);
-        }
-        if (advisor.IsImportedToCrm)
-            item.ForeColor = Color.FromArgb(100, 60, 160);
 
-        return item;
-    }
-
-    private void OnRetrieveVirtualItem(object? sender, RetrieveVirtualItemEventArgs e)
-    {
-        if (_lvCache != null
-            && e.ItemIndex >= _lvCacheStart
-            && e.ItemIndex < _lvCacheStart + _lvCache.Length)
-        {
-            e.Item = _lvCache[e.ItemIndex - _lvCacheStart];
-            return;
-        }
-        if (e.ItemIndex >= 0 && e.ItemIndex < _currentAdvisors.Count)
-            e.Item = BuildListViewItem(_currentAdvisors[e.ItemIndex]);
-        else
-            e.Item = new ListViewItem("?");
-    }
-
-    private void OnCacheVirtualItems(object? sender, CacheVirtualItemsEventArgs e)
-    {
-        if (_lvCache != null
-            && e.StartIndex >= _lvCacheStart
-            && e.EndIndex <= _lvCacheStart + _lvCache.Length - 1)
-            return;
-
-        _lvCacheStart = e.StartIndex;
-        int len = e.EndIndex - e.StartIndex + 1;
-        _lvCache = new ListViewItem[len];
-        for (int i = 0; i < len; i++)
-        {
-            int idx = e.StartIndex + i;
-            _lvCache[i] = idx < _currentAdvisors.Count
-                ? BuildListViewItem(_currentAdvisors[idx])
-                : new ListViewItem("?");
-        }
+        clickedCard.SetSelected(true);
+        _selectedAdvisor = clickedCard.Advisor;
+        ShowAdvisorDetail(_selectedAdvisor.Id);
     }
 
     private void LoadFilterOptions()
@@ -650,17 +651,6 @@ public class MainForm : Form
         SetStatus("Background data refresh complete.");
     }
 
-    private void OnListViewSelectionChanged(object? sender, EventArgs e)
-    {
-        if (_listView.SelectedIndices.Count == 0) return;
-        int idx = _listView.SelectedIndices[0];
-        if (idx < 0 || idx >= _currentAdvisors.Count) return;
-        _selectedAdvisor = _currentAdvisors[idx];
-
-        if (_selectedAdvisor != null)
-            ShowAdvisorDetail(_selectedAdvisor.Id);
-    }
-
     private void ShowAdvisorDetail(int id)
     {
         var advisor = _repo.GetAdvisorById(id);
@@ -695,35 +685,6 @@ public class MainForm : Form
                     ShowAdvisorDetail(id);
             });
         }
-    }
-
-    private void OnColumnClick(object? sender, ColumnClickEventArgs e)
-    {
-        // Simple column sorting via filter
-        var filter = _filterPanel.GetFilter();
-        var col = e.Column switch
-        {
-            0 => "LastName",
-            1 => "RecordType",
-            2 => "CrdNumber",
-            3 => "CurrentFirmName",
-            4 => "State",
-            // 5 = City — no direct sort supported
-            6 => "RegistrationStatus",
-            // 7 = Licenses — no sort
-            8 => "YearsOfExperience",
-            // 9 = Disclosures
-            11 => "UpdatedAt",
-            _ => "LastName"
-        };
-        if (filter.SortBy == col)
-            filter.SortDescending = !filter.SortDescending;
-        else
-        {
-            filter.SortBy = col;
-            filter.SortDescending = false;
-        }
-        LoadAdvisors();
     }
 
     // ── Event handlers ─────────────────────────────────────────────────
@@ -910,9 +871,7 @@ public class MainForm : Form
 
         // Stop background refresh so it doesn't interfere while we wipe the DB.
         _bgData.StopBackgroundRefresh();
-        _lvCache = null;
-        _lvCacheStart = 0;
-        _listView.VirtualListSize = 0;
+        _cardContainer.Controls.Clear();
         _firmListView.Items.Clear();
         _selectedAdvisor = null;
         _selectedFirm = null;
@@ -923,7 +882,10 @@ public class MainForm : Form
         // Wipe the database and SEC cache.
         await Task.Run(() =>
         {
-            _db.ClearAllData();
+            using (var clearDb = new DatabaseContext(_dbPath))
+            {
+                clearDb.ClearAllData();
+            }
             _sec.ClearCache();
         });
 
@@ -1025,7 +987,6 @@ public class MainForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _bgData?.StopBackgroundRefresh();
-        _db?.Dispose();
         base.OnFormClosed(e);
     }
 }
