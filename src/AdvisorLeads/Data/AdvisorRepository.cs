@@ -549,12 +549,26 @@ public class AdvisorRepository
     {
         var conn = _context.GetConnection();
         using var cmd = conn.CreateCommand();
+        // Include advisors that:
+        //   (a) have no qualifications stored yet, OR
+        //   (b) have HasDisclosures=1 but no rows in the Disclosures table — the critical case
+        //       where ind_exams gave them qualifications during bulk fetch but the detail
+        //       endpoint was never called to retrieve the actual disclosure records.
+        // Disclosure-flagged advisors are surfaced first so the most visible gaps are
+        // closed earliest.  The Active-only restriction has been removed so inactive or
+        // terminated advisors with disclosures are also enriched.
         cmd.CommandText = @"
             SELECT a.CrdNumber FROM Advisors a
             WHERE a.CrdNumber IS NOT NULL
-            AND a.RegistrationStatus = 'Active'
-            AND NOT EXISTS (SELECT 1 FROM Qualifications q WHERE q.AdvisorId = a.Id)
-            ORDER BY a.UpdatedAt ASC
+              AND a.IsExcluded = 0
+              AND (
+                    NOT EXISTS (SELECT 1 FROM Qualifications q WHERE q.AdvisorId = a.Id)
+                    OR (a.HasDisclosures = 1 AND NOT EXISTS (SELECT 1 FROM Disclosures d WHERE d.AdvisorId = a.Id))
+              )
+            ORDER BY
+                CASE WHEN a.HasDisclosures = 1 AND NOT EXISTS (SELECT 1 FROM Disclosures d WHERE d.AdvisorId = a.Id) THEN 0
+                     ELSE 1 END,
+                a.UpdatedAt ASC
             LIMIT @limit";
         cmd.Parameters.AddWithValue("@limit", limit);
         var result = new List<string>();

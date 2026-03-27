@@ -571,13 +571,29 @@ public class MainForm : Form
 
         _bgData.StartBackgroundRefresh(intervalMinutes: 60);
 
+        // Run FINRA detail enrichment for advisors that have the HasDisclosures flag set
+        // but no actual Disclosure records in the database yet (the most critical gap).
+        // Also covers advisors missing qualifications that were skipped by bulk-fetch parsing.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _bgData.RunFinraEnrichmentAsync(CancellationToken.None, maxToProcess: 500);
+                if (InvokeRequired)
+                    BeginInvoke(() => LoadAdvisors());
+                else
+                    LoadAdvisors();
+            }
+            catch { /* non-critical */ }
+        });
+
         // Run SEC IAPD enrichment in the background for advisors missing employment/qualifications.
         _ = Task.Run(async () =>
         {
             try
             {
                 var progress = new Progress<string>(_ => { }); // silent background
-                await _bgData.RunIapdEnrichmentAsync(progress, maxToProcess: 200);
+                await _bgData.RunIapdEnrichmentAsync(progress, maxToProcess: 500);
                 if (InvokeRequired)
                     BeginInvoke(() => LoadAdvisors());
                 else
@@ -644,8 +660,34 @@ public class MainForm : Form
     private void ShowAdvisorDetail(int id)
     {
         var advisor = _repo.GetAdvisorById(id);
-        if (advisor != null)
-            _detailCard.ShowAdvisor(advisor);
+        if (advisor == null) return;
+        _detailCard.ShowAdvisor(advisor);
+
+        // If the advisor has a disclosure flag but no disclosure records in the DB yet,
+        // silently fetch full FINRA detail in the background and refresh the card once done.
+        // This covers the common case where the bulk fetch set HasDisclosures=true but the
+        // per-advisor enrichment pass had not yet reached this record.
+        var crdNumber = advisor.CrdNumber;
+        bool needsDisclosureEnrich = advisor.HasDisclosures
+            && advisor.Disclosures.Count == 0
+            && !string.IsNullOrEmpty(crdNumber);
+
+        if (needsDisclosureEnrich)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _sync.RefreshAdvisorAsync(crdNumber!, null);
+                }
+                catch { /* non-critical background enrichment */ }
+
+                if (InvokeRequired)
+                    BeginInvoke(() => { if (_selectedAdvisor?.Id == id) ShowAdvisorDetail(id); });
+                else if (_selectedAdvisor?.Id == id)
+                    ShowAdvisorDetail(id);
+            });
+        }
     }
 
     private void OnColumnClick(object? sender, ColumnClickEventArgs e)
