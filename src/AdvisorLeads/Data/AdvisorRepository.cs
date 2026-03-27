@@ -6,18 +6,21 @@ namespace AdvisorLeads.Data;
 
 public class AdvisorRepository
 {
-    private readonly DatabaseContext _context;
+    private readonly string _dbPath;
 
-    public AdvisorRepository(DatabaseContext context)
+    public AdvisorRepository(string databasePath)
     {
-        _context = context;
+        _dbPath = databasePath;
     }
+
+    private DatabaseContext CreateContext() => new DatabaseContext(_dbPath);
 
     // ── Advisors ──────────────────────────────────────────────────────────
 
     public List<Advisor> GetAdvisors(SearchFilter filter)
     {
-        IQueryable<Advisor> query = _context.Advisors.AsNoTracking();
+        using var ctx = CreateContext();
+        IQueryable<Advisor> query = ctx.Advisors.AsNoTracking();
 
         if (!filter.IncludeExcluded)
             query = query.Where(a => !a.IsExcluded);
@@ -115,7 +118,8 @@ public class AdvisorRepository
 
     public Advisor? GetAdvisorById(int id)
     {
-        return _context.Advisors
+        using var ctx = CreateContext();
+        return ctx.Advisors
             .Include(a => a.EmploymentHistory)
             .Include(a => a.Disclosures)
             .Include(a => a.QualificationList)
@@ -124,7 +128,8 @@ public class AdvisorRepository
 
     public Advisor? GetAdvisorByCrd(string crd)
     {
-        var stub = _context.Advisors.AsNoTracking()
+        using var ctx = CreateContext();
+        var stub = ctx.Advisors.AsNoTracking()
             .Where(a => a.CrdNumber == crd)
             .Select(a => new { a.Id })
             .FirstOrDefault();
@@ -134,41 +139,43 @@ public class AdvisorRepository
 
     public int UpsertAdvisor(Advisor advisor)
     {
+        using var ctx = CreateContext();
+
         Advisor? existing = null;
         if (!string.IsNullOrEmpty(advisor.CrdNumber))
-            existing = _context.Advisors.FirstOrDefault(a => a.CrdNumber == advisor.CrdNumber);
+            existing = ctx.Advisors.FirstOrDefault(a => a.CrdNumber == advisor.CrdNumber);
 
         if (existing != null)
         {
             advisor.Id = existing.Id;
-            UpdateAdvisor(existing, advisor);
+            UpdateAdvisor(ctx, existing, advisor);
         }
         else
         {
-            InsertAdvisor(advisor);
+            InsertAdvisor(ctx, advisor);
         }
 
         // Upsert related data
         if (advisor.EmploymentHistory.Count > 0)
-            UpsertEmploymentHistory(advisor.Id, advisor.EmploymentHistory);
+            UpsertEmploymentHistory(ctx, advisor.Id, advisor.EmploymentHistory);
         if (advisor.Disclosures.Count > 0)
-            UpsertDisclosures(advisor.Id, advisor.Disclosures);
+            UpsertDisclosures(ctx, advisor.Id, advisor.Disclosures);
         if (advisor.QualificationList.Count > 0)
-            UpsertQualifications(advisor.Id, advisor.QualificationList);
+            UpsertQualifications(ctx, advisor.Id, advisor.QualificationList);
 
         return advisor.Id;
     }
 
-    private void InsertAdvisor(Advisor a)
+    private void InsertAdvisor(DatabaseContext ctx, Advisor a)
     {
         a.IsExcluded = false;
         a.IsImportedToCrm = false;
         a.UpdatedAt = DateTime.UtcNow;
-        _context.Advisors.Add(a);
-        _context.SaveChanges();
+        ctx.Advisors.Add(a);
+        ctx.SaveChanges();
     }
 
-    private void UpdateAdvisor(Advisor existing, Advisor incoming)
+    private void UpdateAdvisor(DatabaseContext ctx, Advisor existing, Advisor incoming)
     {
         // COALESCE logic: only overwrite if incoming value is non-null/non-empty
         if (!string.IsNullOrEmpty(incoming.IapdNumber))
@@ -239,12 +246,13 @@ public class AdvisorRepository
             existing.OtherNames = incoming.OtherNames;
 
         existing.UpdatedAt = DateTime.UtcNow;
-        _context.SaveChanges();
+        ctx.SaveChanges();
     }
 
     public void SetAdvisorExcluded(int id, bool excluded, string? reason = null)
     {
-        _context.Advisors
+        using var ctx = CreateContext();
+        ctx.Advisors
             .Where(a => a.Id == id)
             .ExecuteUpdate(s => s
                 .SetProperty(a => a.IsExcluded, excluded)
@@ -254,7 +262,8 @@ public class AdvisorRepository
 
     public void SetAdvisorImported(int id, string? crmId)
     {
-        _context.Advisors
+        using var ctx = CreateContext();
+        ctx.Advisors
             .Where(a => a.Id == id)
             .ExecuteUpdate(s => s
                 .SetProperty(a => a.IsImportedToCrm, true)
@@ -264,15 +273,16 @@ public class AdvisorRepository
 
     public void SetAdvisorFavorited(int id, bool favorited)
     {
-        _context.Advisors
+        using var ctx = CreateContext();
+        ctx.Advisors
             .Where(a => a.Id == id)
             .ExecuteUpdate(s => s
                 .SetProperty(a => a.IsFavorited, favorited));
     }
 
-    private void UpsertEmploymentHistory(int advisorId, List<EmploymentHistory> history)
+    private void UpsertEmploymentHistory(DatabaseContext ctx, int advisorId, List<EmploymentHistory> history)
     {
-        var existing = _context.EmploymentHistory
+        var existing = ctx.EmploymentHistory
             .Where(e => e.AdvisorId == advisorId)
             .ToList();
 
@@ -311,39 +321,40 @@ public class AdvisorRepository
                     Position = h.Position,
                     Street = h.Street
                 };
-                _context.EmploymentHistory.Add(entry);
+                ctx.EmploymentHistory.Add(entry);
                 existing.Add(entry); // prevent double-insert within same batch
             }
         }
 
-        _context.SaveChanges();
+        ctx.SaveChanges();
     }
 
-    private void UpsertDisclosures(int advisorId, List<Disclosure> disclosures)
+    private void UpsertDisclosures(DatabaseContext ctx, int advisorId, List<Disclosure> disclosures)
     {
-        _context.Disclosures.Where(d => d.AdvisorId == advisorId).ExecuteDelete();
+        ctx.Disclosures.Where(d => d.AdvisorId == advisorId).ExecuteDelete();
 
         foreach (var d in disclosures)
             d.AdvisorId = advisorId;
 
-        _context.Disclosures.AddRange(disclosures);
-        _context.SaveChanges();
+        ctx.Disclosures.AddRange(disclosures);
+        ctx.SaveChanges();
     }
 
-    private void UpsertQualifications(int advisorId, List<Qualification> qualifications)
+    private void UpsertQualifications(DatabaseContext ctx, int advisorId, List<Qualification> qualifications)
     {
-        _context.Qualifications.Where(q => q.AdvisorId == advisorId).ExecuteDelete();
+        ctx.Qualifications.Where(q => q.AdvisorId == advisorId).ExecuteDelete();
 
         foreach (var q in qualifications)
             q.AdvisorId = advisorId;
 
-        _context.Qualifications.AddRange(qualifications);
-        _context.SaveChanges();
+        ctx.Qualifications.AddRange(qualifications);
+        ctx.SaveChanges();
     }
 
     public List<string> GetCrdsNeedingEnrichment(int limit)
     {
-        return _context.Advisors.AsNoTracking()
+        using var ctx = CreateContext();
+        return ctx.Advisors.AsNoTracking()
             .Where(a => a.CrdNumber != null
                 && a.RegistrationStatus == "Active"
                 && !a.QualificationList.Any())
@@ -360,7 +371,8 @@ public class AdvisorRepository
     /// </summary>
     public List<string> GetCrdsNeedingIapdEnrichment(int limit = 200)
     {
-        return _context.Advisors.AsNoTracking()
+        using var ctx = CreateContext();
+        return ctx.Advisors.AsNoTracking()
             .Where(a => a.CrdNumber != null
                 && !a.IsExcluded
                 && !a.QualificationList.Any()
@@ -376,9 +388,10 @@ public class AdvisorRepository
 
     public List<Firm> GetFirms(FirmSearchFilter? filter = null)
     {
+        using var ctx = CreateContext();
         filter ??= new FirmSearchFilter();
 
-        IQueryable<Firm> query = _context.Firms.AsNoTracking()
+        IQueryable<Firm> query = ctx.Firms.AsNoTracking()
             .Where(f => !f.IsExcluded);
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
@@ -416,9 +429,11 @@ public class AdvisorRepository
 
     public int UpsertFirm(Firm firm)
     {
+        using var ctx = CreateContext();
+
         Firm? existing = null;
         if (!string.IsNullOrEmpty(firm.CrdNumber))
-            existing = _context.Firms.FirstOrDefault(f => f.CrdNumber == firm.CrdNumber);
+            existing = ctx.Firms.FirstOrDefault(f => f.CrdNumber == firm.CrdNumber);
 
         if (existing != null)
         {
@@ -451,13 +466,13 @@ public class AdvisorRepository
             existing.BrokerProtocolMember = firm.BrokerProtocolMember;
             existing.BrokerProtocolUpdatedAt = firm.BrokerProtocolUpdatedAt;
             existing.UpdatedAt = DateTime.UtcNow;
-            _context.SaveChanges();
+            ctx.SaveChanges();
         }
         else
         {
             firm.UpdatedAt = DateTime.UtcNow;
-            _context.Firms.Add(firm);
-            _context.SaveChanges();
+            ctx.Firms.Add(firm);
+            ctx.SaveChanges();
         }
 
         return firm.Id;
@@ -469,7 +484,8 @@ public class AdvisorRepository
     /// </summary>
     public void UpsertFirmBatch(IEnumerable<Firm> firms, IProgress<string>? progress = null)
     {
-        var conn = _context.Database.GetDbConnection();
+        using var ctx = CreateContext();
+        var conn = ctx.Database.GetDbConnection();
         if (conn.State != System.Data.ConnectionState.Open)
             conn.Open();
 
@@ -573,7 +589,8 @@ public class AdvisorRepository
 
     public List<string> GetDistinctStates()
     {
-        return _context.Advisors.AsNoTracking()
+        using var ctx = CreateContext();
+        return ctx.Advisors.AsNoTracking()
             .Where(a => a.State != null && !a.IsExcluded)
             .Select(a => a.State!)
             .Distinct()
@@ -583,7 +600,8 @@ public class AdvisorRepository
 
     public List<string> GetDistinctFirmStates()
     {
-        return _context.Firms.AsNoTracking()
+        using var ctx = CreateContext();
+        return ctx.Firms.AsNoTracking()
             .Where(f => f.State != null && !f.IsExcluded)
             .Select(f => f.State!)
             .Distinct()
@@ -593,7 +611,8 @@ public class AdvisorRepository
 
     public List<string> GetDistinctFirmNames()
     {
-        return _context.Advisors.AsNoTracking()
+        using var ctx = CreateContext();
+        return ctx.Advisors.AsNoTracking()
             .Where(a => a.CurrentFirmName != null && !a.IsExcluded)
             .Select(a => a.CurrentFirmName!)
             .Distinct()
@@ -604,7 +623,8 @@ public class AdvisorRepository
 
     public int GetAdvisorCount(SearchFilter filter)
     {
-        IQueryable<Advisor> query = _context.Advisors.AsNoTracking();
+        using var ctx = CreateContext();
+        IQueryable<Advisor> query = ctx.Advisors.AsNoTracking();
 
         if (!filter.IncludeExcluded)
             query = query.Where(a => !a.IsExcluded);
@@ -691,14 +711,16 @@ public class AdvisorRepository
     /// </summary>
     public int UpdateBrokerProtocolStatus(List<string> memberNames, DateTime fetchedAt)
     {
+        using var ctx = CreateContext();
+
         // Clear all existing memberships
-        _context.Firms.ExecuteUpdate(s => s
+        ctx.Firms.ExecuteUpdate(s => s
             .SetProperty(f => f.BrokerProtocolMember, false));
 
         if (memberNames.Count == 0) return 0;
 
         // Load all firm names for fuzzy matching
-        var firms = _context.Firms.AsNoTracking()
+        var firms = ctx.Firms.AsNoTracking()
             .Where(f => f.Name != null)
             .Select(f => new { f.Id, f.Name })
             .ToList();
@@ -727,7 +749,7 @@ public class AdvisorRepository
         int updated = 0;
         if (toUpdate.Count > 0)
         {
-            updated = _context.Firms
+            updated = ctx.Firms
                 .Where(f => toUpdate.Contains(f.Id))
                 .ExecuteUpdate(s => s
                     .SetProperty(f => f.BrokerProtocolMember, true)

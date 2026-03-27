@@ -5,16 +5,19 @@ namespace AdvisorLeads.Data;
 
 public class ListRepository
 {
-    private readonly DatabaseContext _context;
+    private readonly string _dbPath;
 
-    public ListRepository(DatabaseContext context)
+    public ListRepository(string databasePath)
     {
-        _context = context;
+        _dbPath = databasePath;
     }
+
+    private DatabaseContext CreateContext() => new DatabaseContext(_dbPath);
 
     public List<AdvisorList> GetAllLists()
     {
-        return _context.AdvisorLists
+        using var ctx = CreateContext();
+        return ctx.AdvisorLists
             .AsNoTracking()
             .Select(l => new AdvisorList
             {
@@ -23,7 +26,7 @@ public class ListRepository
                 Description = l.Description,
                 CreatedAt = l.CreatedAt,
                 UpdatedAt = l.UpdatedAt,
-                MemberCount = _context.AdvisorListMembers.Count(m => m.ListId == l.Id)
+                MemberCount = ctx.AdvisorListMembers.Count(m => m.ListId == l.Id)
             })
             .OrderBy(l => l.Name)
             .ToList();
@@ -31,6 +34,7 @@ public class ListRepository
 
     public AdvisorList CreateList(string name, string? description = null)
     {
+        using var ctx = CreateContext();
         var list = new AdvisorList
         {
             Name = name,
@@ -38,14 +42,15 @@ public class ListRepository
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
-        _context.AdvisorLists.Add(list);
-        _context.SaveChanges();
+        ctx.AdvisorLists.Add(list);
+        ctx.SaveChanges();
         return list;
     }
 
     public void RenameList(int listId, string newName, string? description = null)
     {
-        _context.AdvisorLists
+        using var ctx = CreateContext();
+        ctx.AdvisorLists
             .Where(l => l.Id == listId)
             .ExecuteUpdate(s => s
                 .SetProperty(l => l.Name, newName)
@@ -55,37 +60,41 @@ public class ListRepository
 
     public void DeleteList(int listId)
     {
-        _context.AdvisorLists
+        using var ctx = CreateContext();
+        ctx.AdvisorLists
             .Where(l => l.Id == listId)
             .ExecuteDelete();
     }
 
     public bool AddToList(int listId, int advisorId, string? notes = null)
     {
-        if (_context.AdvisorListMembers.Any(m => m.ListId == listId && m.AdvisorId == advisorId))
+        using var ctx = CreateContext();
+        if (ctx.AdvisorListMembers.Any(m => m.ListId == listId && m.AdvisorId == advisorId))
             return false;
 
-        _context.AdvisorListMembers.Add(new AdvisorListMember
+        ctx.AdvisorListMembers.Add(new AdvisorListMember
         {
             ListId = listId,
             AdvisorId = advisorId,
             Notes = notes,
             AddedAt = DateTime.UtcNow
         });
-        _context.SaveChanges();
+        ctx.SaveChanges();
         return true;
     }
 
     public void RemoveFromList(int listId, int advisorId)
     {
-        _context.AdvisorListMembers
+        using var ctx = CreateContext();
+        ctx.AdvisorListMembers
             .Where(m => m.ListId == listId && m.AdvisorId == advisorId)
             .ExecuteDelete();
     }
 
     public List<Advisor> GetListMembers(int listId)
     {
-        var members = _context.AdvisorListMembers
+        using var ctx = CreateContext();
+        var members = ctx.AdvisorListMembers
             .AsNoTracking()
             .Where(m => m.ListId == listId)
             .Include(m => m.Advisor!)
@@ -105,7 +114,8 @@ public class ListRepository
 
     public List<int> GetListIdsForAdvisor(int advisorId)
     {
-        return _context.AdvisorListMembers
+        using var ctx = CreateContext();
+        return ctx.AdvisorListMembers
             .AsNoTracking()
             .Where(m => m.AdvisorId == advisorId)
             .Select(m => m.ListId)
@@ -114,7 +124,8 @@ public class ListRepository
 
     public void UpdateMemberNotes(int listId, int advisorId, string? notes)
     {
-        _context.AdvisorListMembers
+        using var ctx = CreateContext();
+        ctx.AdvisorListMembers
             .Where(m => m.ListId == listId && m.AdvisorId == advisorId)
             .ExecuteUpdate(s => s.SetProperty(m => m.Notes, notes));
     }
