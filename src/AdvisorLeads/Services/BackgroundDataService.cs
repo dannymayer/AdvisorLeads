@@ -317,6 +317,28 @@ public class BackgroundDataService
     }
 
     /// <summary>
+    /// Runs a batch of FINRA detail enrichment for advisors that are missing qualifications
+    /// or have the HasDisclosures flag set but no Disclosure records in the database.
+    /// Safe to call multiple times — GetCrdsNeedingEnrichment returns empty when caught up.
+    /// </summary>
+    public async Task<int> RunFinraEnrichmentAsync(
+        CancellationToken ct = default,
+        int maxToProcess = 500)
+    {
+        try
+        {
+            var count = await EnrichAdvisorsWithDetailAsync(
+                new Progress<string>(_ => { }),
+                ct,
+                maxToProcess);
+            if (count > 0) DataUpdated?.Invoke();
+            return count;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return 0; }
+    }
+
+    /// <summary>
     /// Runs a batch of SEC IAPD enrichment for advisors missing qualifications/employment.
     /// Safe to call multiple times — GetCrdsNeedingIapdEnrichment returns empty when caught up.
     /// </summary>

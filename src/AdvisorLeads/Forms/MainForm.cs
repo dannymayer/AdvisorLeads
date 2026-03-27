@@ -48,6 +48,10 @@ public class MainForm : Form
     private Firm? _selectedFirm;
     private int _totalAdvisorCount = 0;
     private int _currentPage = 1;
+    // Tracks CRDs for which on-demand disclosure enrichment has already been triggered
+    // this session, preventing infinite retry loops when FINRA returns no disclosures.
+    private readonly HashSet<string> _enrichmentTriggered =
+        new(StringComparer.OrdinalIgnoreCase);
     private ToolStripButton _btnPrevPage = null!;
     private ToolStripButton _btnNextPage = null!;
 
@@ -575,13 +579,29 @@ public class MainForm : Form
 
         _bgData.StartBackgroundRefresh(intervalMinutes: 60);
 
+        // Run FINRA detail enrichment for advisors that have the HasDisclosures flag set
+        // but no actual Disclosure records in the database yet (the most critical gap).
+        // Also covers advisors missing qualifications that were skipped by bulk-fetch parsing.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _bgData.RunFinraEnrichmentAsync(CancellationToken.None, maxToProcess: 500);
+                if (InvokeRequired)
+                    BeginInvoke(() => LoadAdvisors());
+                else
+                    LoadAdvisors();
+            }
+            catch { /* non-critical */ }
+        });
+
         // Run SEC IAPD enrichment in the background for advisors missing employment/qualifications.
         _ = Task.Run(async () =>
         {
             try
             {
                 var progress = new Progress<string>(_ => { }); // silent background
-                await _bgData.RunIapdEnrichmentAsync(progress, maxToProcess: 200);
+                await _bgData.RunIapdEnrichmentAsync(progress, maxToProcess: 500);
                 if (InvokeRequired)
                     BeginInvoke(() => LoadAdvisors());
                 else
@@ -637,8 +657,49 @@ public class MainForm : Form
     private void ShowAdvisorDetail(int id)
     {
         var advisor = _repo.GetAdvisorById(id);
-        if (advisor != null)
-            _detailCard.ShowAdvisor(advisor);
+        if (advisor == null) return;
+        _detailCard.ShowAdvisor(advisor);
+
+        // If the advisor has a disclosure flag but no disclosure records in the DB yet,
+        // silently fetch full FINRA detail in the background and refresh the card once done.
+        // This covers the common case where the bulk fetch set HasDisclosures=true but the
+        // per-advisor enrichment pass had not yet reached this record.
+        // _enrichmentTriggered.Add() returns false if already added, preventing infinite retries
+        // in the edge case where FINRA returns HasDisclosures=true but an empty disclosures array.
+        var crdNumber = advisor.CrdNumber;
+        bool needsDisclosureEnrich = advisor.HasDisclosures
+            && advisor.Disclosures.Count == 0
+            && !string.IsNullOrEmpty(crdNumber)
+            && _enrichmentTriggered.Add(crdNumber!);
+
+        if (needsDisclosureEnrich)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _sync.RefreshAdvisorAsync(crdNumber!, null);
+                }
+                catch { /* non-critical background enrichment */ }
+
+                // Guard against the form being disposed while the background refresh ran.
+                try
+                {
+                    if (!IsHandleCreated || IsDisposed) return;
+
+                    if (InvokeRequired)
+                        BeginInvoke(new Action(() =>
+                        {
+                            if (!IsHandleCreated || IsDisposed) return;
+                            if (_selectedAdvisor?.Id == id) ShowAdvisorDetail(id);
+                        }));
+                    else if (_selectedAdvisor?.Id == id)
+                        ShowAdvisorDetail(id);
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+            });
+        }
     }
 
     // ── Event handlers ─────────────────────────────────────────────────
