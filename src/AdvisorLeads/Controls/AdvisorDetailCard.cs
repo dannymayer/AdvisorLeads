@@ -15,6 +15,8 @@ public class AdvisorDetailCard : UserControl
     private Label _lblStatusBadge = null!;
     private Label _lblCrmBadge = null!;
     private Label _lblExcludedBadge = null!;
+    private Label _lblBcScopeBadge = null!;
+    private Label _lblIaScopeBadge = null!;
 
     // Info grid
     private TableLayoutPanel _infoGrid = null!;
@@ -40,6 +42,7 @@ public class AdvisorDetailCard : UserControl
     public event EventHandler<Advisor>? RefreshRequested;
     public event EventHandler<Advisor>? AddToListRequested;
     public event EventHandler<Advisor>? FavoriteRequested;
+    public event EventHandler<string>? FirmNavigationRequested;
 
     public AdvisorDetailCard()
     {
@@ -124,8 +127,10 @@ public class AdvisorDetailCard : UserControl
         _lblStatusBadge = MakeBadge("", Color.FromArgb(60, 160, 80));
         _lblCrmBadge = MakeBadge("Wealthbox", Color.FromArgb(130, 80, 170));
         _lblExcludedBadge = MakeBadge("EXCLUDED", Color.FromArgb(200, 60, 60));
+        _lblBcScopeBadge = MakeBadge("", Color.FromArgb(50, 100, 160));
+        _lblIaScopeBadge = MakeBadge("", Color.FromArgb(20, 120, 100));
 
-        badgePanel.Controls.AddRange(new Control[] { _lblSourceBadge, _lblRecordTypeBadge, _lblStatusBadge, _lblCrmBadge, _lblExcludedBadge });
+        badgePanel.Controls.AddRange(new Control[] { _lblSourceBadge, _lblRecordTypeBadge, _lblStatusBadge, _lblBcScopeBadge, _lblIaScopeBadge, _lblCrmBadge, _lblExcludedBadge });
         header.Controls.AddRange(new Control[] { _lblName, _lblCrd, _lnkProfiles, badgePanel });
         mainLayout.Controls.Add(header, 0, 0);
 
@@ -210,7 +215,10 @@ public class AdvisorDetailCard : UserControl
             GridLines = true,
             Font = new Font("Segoe UI", 9)
         };
-        _lstRegistrations.Columns.Add("State / Authority", -2);
+        _lstRegistrations.Columns.Add("State", 80);
+        _lstRegistrations.Columns.Add("Category", 80);
+        _lstRegistrations.Columns.Add("Status", 100);
+        _lstRegistrations.Columns.Add("Date", -2);
         regPage.Controls.Add(_lstRegistrations);
 
         _tabs.TabPages.AddRange(new[] { empPage, discPage, qualPage, regPage });
@@ -256,6 +264,8 @@ public class AdvisorDetailCard : UserControl
         _lblStatusBadge.Visible = false;
         _lblCrmBadge.Visible = false;
         _lblExcludedBadge.Visible = false;
+        _lblBcScopeBadge.Visible = false;
+        _lblIaScopeBadge.Visible = false;
         _lnkProfiles.Visible = false;
         _lnkProfiles.Links.Clear();
         _btnRefresh.Enabled = false;
@@ -321,11 +331,33 @@ public class AdvisorDetailCard : UserControl
         _lblCrmBadge.Visible = advisor.IsImportedToCrm;
         _lblExcludedBadge.Visible = advisor.IsExcluded;
 
+        if (!string.IsNullOrEmpty(advisor.BcScope))
+        {
+            _lblBcScopeBadge.Text = $"BC: {advisor.BcScope}";
+            _lblBcScopeBadge.Visible = true;
+        }
+        else
+        {
+            _lblBcScopeBadge.Visible = false;
+        }
+
+        if (!string.IsNullOrEmpty(advisor.IaScope))
+        {
+            _lblIaScopeBadge.Text = $"IA: {advisor.IaScope}";
+            _lblIaScopeBadge.Visible = true;
+        }
+        else
+        {
+            _lblIaScopeBadge.Visible = false;
+        }
+
         // Info grid
         _infoGrid.Controls.Clear();
         _infoGrid.RowStyles.Clear();
 
-        AddInfoRow("Firm:", advisor.CurrentFirmName ?? "—", "State:", advisor.State ?? "—");
+        AddInfoRowWithLink("Firm:", advisor.CurrentFirmName ?? "—", advisor.CurrentFirmCrd,
+                           crd => FirmNavigationRequested?.Invoke(this, crd),
+                           "State:", advisor.State ?? "—");
         AddInfoRow("City:", $"{advisor.City ?? "—"}{(advisor.ZipCode != null ? " " + advisor.ZipCode : "")}", "Phone:", advisor.Phone ?? "—");
         AddInfoRow("Email:", advisor.Email ?? "—", "Title:", advisor.Title ?? "—");
         AddInfoRow("Licenses:", advisor.Licenses ?? "—", "Experience:", advisor.YearsOfExperience.HasValue ? $"{advisor.YearsOfExperience} years" : "—");
@@ -337,6 +369,23 @@ public class AdvisorDetailCard : UserControl
             AddInfoRow("Disc. Flags:", advisor.DisclosureFlags, "", "");
         if (!string.IsNullOrEmpty(advisor.ExclusionReason))
             AddInfoRow("Excluded Reason:", advisor.ExclusionReason, "", "");
+        if (!string.IsNullOrEmpty(advisor.BcScope) || !string.IsNullOrEmpty(advisor.IaScope))
+            AddInfoRow("BC Scope:", advisor.BcScope ?? "—", "IA Scope:", advisor.IaScope ?? "—");
+        if (advisor.CareerStartDate.HasValue)
+            AddInfoRow("Career Start:", advisor.CareerStartDate.Value.ToString("yyyy-MM-dd"),
+                       "Total Firms:", advisor.TotalFirmCount.HasValue ? advisor.TotalFirmCount.Value.ToString() : "—");
+        if (advisor.BcDisclosureCount > 0 || advisor.IaDisclosureCount > 0)
+            AddInfoRow("BC Disclosures:", advisor.BcDisclosureCount.ToString(), "IA Disclosures:", advisor.IaDisclosureCount.ToString());
+
+        var disclosureTypes = new List<string>();
+        if (advisor.HasCriminalDisclosure) disclosureTypes.Add("Criminal");
+        if (advisor.HasRegulatoryDisclosure) disclosureTypes.Add("Regulatory");
+        if (advisor.HasCivilDisclosure) disclosureTypes.Add("Civil");
+        if (advisor.HasCustomerComplaintDisclosure) disclosureTypes.Add("Customer Complaint");
+        if (advisor.HasFinancialDisclosure) disclosureTypes.Add("Financial");
+        if (advisor.HasTerminationDisclosure) disclosureTypes.Add("Termination");
+        if (disclosureTypes.Count > 0)
+            AddInfoRow("Disc. Types:", string.Join(", ", disclosureTypes), "", "");
 
         // Employment
         _lstEmployment.Items.Clear();
@@ -350,7 +399,10 @@ public class AdvisorDetailCard : UserControl
             item.SubItems.Add(emp.StartDate?.ToString("yyyy-MM") ?? "");
             item.SubItems.Add(emp.IsCurrent ? "Current" : (emp.EndDate > DateTime.MinValue ? emp.EndDate!.Value.ToString("yyyy-MM") : ""));
             item.SubItems.Add(emp.Position ?? "");
-            item.SubItems.Add(emp.Street ?? "");
+            var location = !string.IsNullOrWhiteSpace(emp.FirmCity)
+                ? $"{emp.FirmCity}{(!string.IsNullOrWhiteSpace(emp.FirmState) ? ", " + emp.FirmState : "")}"
+                : (emp.Street ?? "");
+            item.SubItems.Add(location);
             if (emp.IsCurrent)
                 item.BackColor = Color.FromArgb(235, 248, 235);
             _lstEmployment.Items.Add(item);
@@ -383,12 +435,30 @@ public class AdvisorDetailCard : UserControl
             _lstQualifications.Items.Add(item);
         }
 
-        // Registrations (from RegAuthorities comma-joined state names)
+        // Registrations
         _lstRegistrations.Items.Clear();
-        if (!string.IsNullOrEmpty(advisor.RegAuthorities))
+        if (advisor.Registrations.Count > 0)
         {
+            foreach (var reg in advisor.Registrations)
+            {
+                var item = new ListViewItem(reg.StateCode);
+                item.SubItems.Add(reg.RegistrationCategory ?? "");
+                item.SubItems.Add(reg.RegistrationStatus ?? "");
+                item.SubItems.Add(reg.StatusDate ?? "");
+                _lstRegistrations.Items.Add(item);
+            }
+        }
+        else if (!string.IsNullOrEmpty(advisor.RegAuthorities))
+        {
+            // Fall back to RegAuthorities comma-joined state codes for older records
             foreach (var state in advisor.RegAuthorities.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-                _lstRegistrations.Items.Add(state);
+            {
+                var item = new ListViewItem(state);
+                item.SubItems.Add("");
+                item.SubItems.Add("");
+                item.SubItems.Add("");
+                _lstRegistrations.Items.Add(item);
+            }
         }
         _tabs.TabPages[3].Text = _lstRegistrations.Items.Count > 0
             ? $"Registrations ({_lstRegistrations.Items.Count})"
@@ -416,6 +486,41 @@ public class AdvisorDetailCard : UserControl
 
         _infoGrid.Controls.Add(MakeInfoLabel(label1), 0, row);
         _infoGrid.Controls.Add(MakeInfoValue(value1), 1, row);
+        _infoGrid.Controls.Add(MakeInfoLabel(label2), 2, row);
+        _infoGrid.Controls.Add(MakeInfoValue(value2), 3, row);
+    }
+
+    private void AddInfoRowWithLink(string label1, string linkText, string? linkData, Action<string>? onClick, string label2, string value2)
+    {
+        var lnk = new LinkLabel
+        {
+            Text = linkText,
+            Font = new Font("Segoe UI", 8.5f),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Color.FromArgb(30, 30, 60),
+            Padding = new Padding(2, 2, 0, 2)
+        };
+
+        if (!string.IsNullOrEmpty(linkData) && onClick != null)
+        {
+            lnk.Links.Add(0, linkText.Length, linkData);
+            lnk.LinkClicked += (_, e) =>
+            {
+                if (e.Link?.LinkData is string data) onClick(data);
+            };
+        }
+        else
+        {
+            lnk.LinkBehavior = LinkBehavior.NeverUnderline;
+        }
+
+        int row = _infoGrid.RowCount;
+        _infoGrid.RowCount++;
+        _infoGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        _infoGrid.Controls.Add(MakeInfoLabel(label1), 0, row);
+        _infoGrid.Controls.Add(lnk, 1, row);
         _infoGrid.Controls.Add(MakeInfoLabel(label2), 2, row);
         _infoGrid.Controls.Add(MakeInfoValue(value2), 3, row);
     }

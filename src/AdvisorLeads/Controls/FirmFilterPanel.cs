@@ -187,6 +187,8 @@ public class FirmFilterPanel : UserControl
         _cboState.SelectedIndex = idx >= 0 ? idx : 0;
     }
 
+    public void Clear() => OnClear(this, EventArgs.Empty);
+
     private void OnClear(object? sender, EventArgs e)
     {
         _txtName.Clear();

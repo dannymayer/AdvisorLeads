@@ -125,6 +125,20 @@ public class AdvisorRepository
         if (filter.ShowFavoritesOnly)
             query = query.Where(a => a.IsFavorited);
 
+        if (!string.IsNullOrWhiteSpace(filter.DisclosureType))
+        {
+            query = filter.DisclosureType switch
+            {
+                "Criminal" => query.Where(a => a.HasCriminalDisclosure),
+                "Regulatory" => query.Where(a => a.HasRegulatoryDisclosure),
+                "Civil" => query.Where(a => a.HasCivilDisclosure),
+                "Customer Complaint" => query.Where(a => a.HasCustomerComplaintDisclosure),
+                "Financial" => query.Where(a => a.HasFinancialDisclosure),
+                "Termination" => query.Where(a => a.HasTerminationDisclosure),
+                _ => query
+            };
+        }
+
         return query;
     }
 
@@ -151,6 +165,7 @@ public class AdvisorRepository
             .Include(a => a.EmploymentHistory)
             .Include(a => a.Disclosures)
             .Include(a => a.QualificationList)
+            .Include(a => a.Registrations)
             .FirstOrDefault(a => a.Id == id);
     }
 
@@ -190,6 +205,9 @@ public class AdvisorRepository
             UpsertDisclosures(ctx, advisor.Id, advisor.Disclosures);
         if (advisor.QualificationList.Count > 0)
             UpsertQualifications(ctx, advisor.Id, advisor.QualificationList);
+
+        if (advisor.Registrations.Count > 0)
+            UpsertRegistrations(ctx, advisor.Id, advisor.Registrations);
 
         return advisor.Id;
     }
@@ -274,6 +292,33 @@ public class AdvisorRepository
             existing.OtherNames = incoming.OtherNames;
 
         existing.UpdatedAt = DateTime.UtcNow;
+
+        if (!string.IsNullOrEmpty(incoming.BcScope))
+            existing.BcScope = incoming.BcScope;
+        if (!string.IsNullOrEmpty(incoming.IaScope))
+            existing.IaScope = incoming.IaScope;
+
+        // Accumulate disclosure type flags across sources
+        existing.HasCriminalDisclosure = existing.HasCriminalDisclosure || incoming.HasCriminalDisclosure;
+        existing.HasRegulatoryDisclosure = existing.HasRegulatoryDisclosure || incoming.HasRegulatoryDisclosure;
+        existing.HasCivilDisclosure = existing.HasCivilDisclosure || incoming.HasCivilDisclosure;
+        existing.HasCustomerComplaintDisclosure = existing.HasCustomerComplaintDisclosure || incoming.HasCustomerComplaintDisclosure;
+        existing.HasFinancialDisclosure = existing.HasFinancialDisclosure || incoming.HasFinancialDisclosure;
+        existing.HasTerminationDisclosure = existing.HasTerminationDisclosure || incoming.HasTerminationDisclosure;
+
+        existing.BcDisclosureCount = Math.Max(existing.BcDisclosureCount, incoming.BcDisclosureCount);
+        existing.IaDisclosureCount = Math.Max(existing.IaDisclosureCount, incoming.IaDisclosureCount);
+
+        if (incoming.CareerStartDate.HasValue &&
+            (!existing.CareerStartDate.HasValue || incoming.CareerStartDate.Value < existing.CareerStartDate.Value))
+            existing.CareerStartDate = incoming.CareerStartDate;
+
+        if (incoming.TotalFirmCount.HasValue)
+            existing.TotalFirmCount = Math.Max(existing.TotalFirmCount ?? 0, incoming.TotalFirmCount.Value);
+
+        if (!string.IsNullOrEmpty(incoming.BrokerCheckUrl))
+            existing.BrokerCheckUrl = incoming.BrokerCheckUrl;
+
         ctx.SaveChanges();
     }
 
@@ -336,6 +381,10 @@ public class AdvisorRepository
                     if (hasNewCrd) match.FirmCrd = h.FirmCrd;
                     if (!string.IsNullOrWhiteSpace(h.Street)) match.Street = h.Street;
                 }
+
+                if (!string.IsNullOrWhiteSpace(h.FirmCity)) match.FirmCity = h.FirmCity;
+                if (!string.IsNullOrWhiteSpace(h.FirmState)) match.FirmState = h.FirmState;
+                if (!string.IsNullOrWhiteSpace(h.RegistrationCategories)) match.RegistrationCategories = h.RegistrationCategories;
             }
             else
             {
@@ -347,7 +396,10 @@ public class AdvisorRepository
                     StartDate = h.StartDate,
                     EndDate = (h.EndDate.HasValue && h.EndDate.Value != DateTime.MinValue) ? h.EndDate : null,
                     Position = h.Position,
-                    Street = h.Street
+                    Street = h.Street,
+                    FirmCity = string.IsNullOrWhiteSpace(h.FirmCity) ? null : h.FirmCity,
+                    FirmState = string.IsNullOrWhiteSpace(h.FirmState) ? null : h.FirmState,
+                    RegistrationCategories = string.IsNullOrWhiteSpace(h.RegistrationCategories) ? null : h.RegistrationCategories
                 };
                 ctx.EmploymentHistory.Add(entry);
                 existing.Add(entry); // prevent double-insert within same batch
@@ -376,6 +428,17 @@ public class AdvisorRepository
             q.AdvisorId = advisorId;
 
         ctx.Qualifications.AddRange(qualifications);
+        ctx.SaveChanges();
+    }
+
+    private void UpsertRegistrations(DatabaseContext ctx, int advisorId, List<AdvisorRegistration> registrations)
+    {
+        ctx.AdvisorRegistrations.Where(r => r.AdvisorId == advisorId).ExecuteDelete();
+
+        foreach (var r in registrations)
+            r.AdvisorId = advisorId;
+
+        ctx.AdvisorRegistrations.AddRange(registrations);
         ctx.SaveChanges();
     }
 
@@ -852,6 +915,30 @@ public class AdvisorRepository
     }
 
     // ── Dashboard & Cross-Navigation ──────────────────────────────────
+
+    public (int Total, int WithDisclosures, double DisclosurePercent, int Finra, int Sec, int Favorites, int InCrm) GetAdvisorStats()
+    {
+        using var ctx = CreateContext();
+        var q = ctx.Advisors.AsNoTracking().Where(a => !a.IsExcluded);
+        int total = q.Count();
+        int withDisclosures = q.Count(a => a.HasDisclosures);
+        int finra = q.Count(a => a.Source == "FINRA");
+        int sec = q.Count(a => a.Source == "SEC");
+        int favorites = q.Count(a => a.IsFavorited);
+        int inCrm = q.Count(a => a.IsImportedToCrm);
+        double pct = total > 0 ? Math.Round(withDisclosures * 100.0 / total, 1) : 0;
+        return (total, withDisclosures, pct, finra, sec, favorites, inCrm);
+    }
+
+    public (int Total, int InvestmentAdvisor, int BrokerDealer) GetFirmStats()
+    {
+        using var ctx = CreateContext();
+        var q = ctx.Firms.AsNoTracking().Where(f => !f.IsExcluded);
+        int total = q.Count();
+        int ia = q.Count(f => f.RecordType == "Investment Advisor");
+        int bd = q.Count(f => f.RecordType == "Broker-Dealer");
+        return (total, ia, bd);
+    }
 
     public (int TotalAdvisors, int TotalFirms, int Favorites, int InCrm,
             int WithDisclosures, int FavsNotInCrm, int UpdatedToday) GetDashboardStats()

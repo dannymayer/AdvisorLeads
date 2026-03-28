@@ -115,6 +115,20 @@ public class Firm
     /// <summary>Total AUM of related persons/affiliates in USD (CSV column "5F(2)(c)" / "5F(3)").</summary>
     public decimal? TotalAumRelatedPersons { get; set; }
 
+    // ── EDGAR bulk metadata (from submissions.zip) ──
+
+    /// <summary>EDGAR CIK number, padded to 10 digits in EDGAR but stored without leading zeros.</summary>
+    public string? EdgarCik { get; set; }
+
+    /// <summary>Standard Industry Classification code (e.g., "6282" = Investment Advice).</summary>
+    public string? SicCode { get; set; }
+
+    /// <summary>Human-readable SIC description (e.g., "Investment Advice").</summary>
+    public string? SicDescription { get; set; }
+
+    /// <summary>Fiscal year end in MMDD format (e.g., "1231" = December 31).</summary>
+    public string? FiscalYearEnd { get; set; }
+
     public bool IsExcluded { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

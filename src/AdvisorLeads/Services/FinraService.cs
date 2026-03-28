@@ -224,8 +224,10 @@ public class FinraService
                         FirmName = firmName,
                         FirmCrd = string.IsNullOrEmpty(firmId) ? null : firmId,
                         StartDate = startDt,
-                        EndDate = null, // current
+                        EndDate = null,
                         Street = string.IsNullOrWhiteSpace(street) ? null : TitleCase(street),
+                        FirmCity = string.IsNullOrWhiteSpace(city) ? null : TitleCase(city),
+                        FirmState = string.IsNullOrWhiteSpace(state) ? null : state,
                         Position = iaOnly == "Y" ? "Investment Adviser Representative" : "Registered Representative"
                     });
                 }
@@ -308,6 +310,23 @@ public class FinraService
                     regAuthorities = string.Join(", ", stateList);
             }
 
+            var registrationList = new List<AdvisorRegistration>();
+            if (regStates != null)
+            {
+                foreach (var s in regStates)
+                {
+                    var stateCode = s["state"]?.ToString()?.Trim();
+                    if (string.IsNullOrEmpty(stateCode)) continue;
+                    registrationList.Add(new AdvisorRegistration
+                    {
+                        StateCode = stateCode,
+                        RegistrationCategory = s["regAuthority"]?.ToString()?.Trim() ?? s["category"]?.ToString()?.Trim(),
+                        RegistrationStatus = s["status"]?.ToString()?.Trim(),
+                        StatusDate = s["statusDate"]?.ToString()?.Trim()
+                    });
+                }
+            }
+
             // Disclosures
             var disclosureList = new List<Disclosure>();
             var disclosures = c["disclosures"] as JArray;
@@ -333,6 +352,45 @@ public class FinraService
                 ? string.Join(", ", qualificationList.Select(q => q.Code ?? q.Name).Where(s => !string.IsNullOrEmpty(s)))
                 : (regCount > 0 ? $"{regCount} active registration(s)" : null);
 
+            bool hasCriminal = false, hasRegulatory = false, hasCivil = false,
+                 hasComplaint = false, hasFinancial = false, hasTermination = false;
+            foreach (var disc in disclosureList)
+            {
+                var t = disc.Type.ToLowerInvariant();
+                if (t.Contains("criminal")) hasCriminal = true;
+                else if (t.Contains("regulatory") || t.Contains("reg action")) hasRegulatory = true;
+                else if (t.Contains("civil")) hasCivil = true;
+                else if (t.Contains("customer") || t.Contains("complaint") || t.Contains("arbitration")) hasComplaint = true;
+                else if (t.Contains("financial") || t.Contains("bankruptcy") || t.Contains("bankrupt")) hasFinancial = true;
+                else if (t.Contains("termination") || t.Contains("separation")) hasTermination = true;
+            }
+
+            var disclosureTypes = c["disclosureTypes"] as JArray;
+            if (disclosureTypes != null)
+            {
+                foreach (var dt in disclosureTypes)
+                {
+                    var t = dt.ToString().ToLowerInvariant();
+                    if (t.Contains("criminal")) hasCriminal = true;
+                    else if (t.Contains("regulatory")) hasRegulatory = true;
+                    else if (t.Contains("civil")) hasCivil = true;
+                    else if (t.Contains("customer") || t.Contains("complaint")) hasComplaint = true;
+                    else if (t.Contains("financial") || t.Contains("bankruptcy")) hasFinancial = true;
+                    else if (t.Contains("termination") || t.Contains("separation")) hasTermination = true;
+                }
+            }
+
+            int bcDiscCount = c["bcDisclosureCount"]?.Value<int>() ?? disclosureList.Count;
+            int iaDiscCount = c["iaDisclosureCount"]?.Value<int>() ?? 0;
+
+            DateTime? careerStartDate = employmentHistory
+                .Where(e => e.StartDate.HasValue)
+                .Select(e => e.StartDate!.Value)
+                .DefaultIfEmpty()
+                .Min() is DateTime min && min != default ? min : (DateTime?)null;
+
+            int totalFirmCount = employmentHistory.Count;
+
             return new Advisor
             {
                 CrdNumber = crd,
@@ -354,9 +412,23 @@ public class FinraService
                 RegAuthorities = regAuthorities,
                 Source = "FINRA",
                 RecordType = recordType,
+                BcScope = string.IsNullOrWhiteSpace(bcScope) ? null : bcScope,
+                IaScope = string.IsNullOrWhiteSpace(iaScope) ? null : iaScope,
+                HasCriminalDisclosure = hasCriminal,
+                HasRegulatoryDisclosure = hasRegulatory,
+                HasCivilDisclosure = hasCivil,
+                HasCustomerComplaintDisclosure = hasComplaint,
+                HasFinancialDisclosure = hasFinancial,
+                HasTerminationDisclosure = hasTermination,
+                BcDisclosureCount = bcDiscCount,
+                IaDisclosureCount = iaDiscCount,
+                BrokerCheckUrl = $"https://brokercheck.finra.org/individual/summary/{crd}",
+                CareerStartDate = careerStartDate,
+                TotalFirmCount = totalFirmCount > 0 ? totalFirmCount : (int?)null,
                 EmploymentHistory = employmentHistory,
                 QualificationList = qualificationList,
-                Disclosures = disclosureList
+                Disclosures = disclosureList,
+                Registrations = registrationList
             };
         }
         catch

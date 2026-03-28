@@ -25,6 +25,7 @@ public class DatabaseContext : DbContext
     public DbSet<FormAdvFiling> FormAdvFilings => Set<FormAdvFiling>();
     public DbSet<FirmFilingEvent> FirmFilingEvents => Set<FirmFilingEvent>();
     public DbSet<FirmAumHistory> FirmAumHistory => Set<FirmAumHistory>();
+    public DbSet<AdvisorRegistration> AdvisorRegistrations => Set<AdvisorRegistration>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder options)
     {
@@ -111,6 +112,10 @@ public class DatabaseContext : DbContext
 
             e.HasMany(a => a.QualificationList).WithOne()
                 .HasForeignKey(q => q.AdvisorId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasMany(a => a.Registrations).WithOne()
+                .HasForeignKey(r => r.AdvisorId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -238,6 +243,15 @@ public class DatabaseContext : DbContext
             e.HasIndex(h => h.SnapshotDate);
             e.Property(h => h.CreatedAt).HasDefaultValueSql("datetime('now')");
         });
+
+        // ── AdvisorRegistrations ──
+        m.Entity<AdvisorRegistration>(e =>
+        {
+            e.ToTable("AdvisorRegistrations");
+            e.HasKey(r => r.Id);
+            e.HasIndex(r => r.AdvisorId);
+            e.HasIndex(r => new { r.AdvisorId, r.StateCode, r.RegistrationCategory }).IsUnique();
+        });
     }
 
     /// <summary>
@@ -308,6 +322,19 @@ public class DatabaseContext : DbContext
             ["IsFavorited"] = "INTEGER NOT NULL DEFAULT 0",
             ["IsExcluded"] = "INTEGER NOT NULL DEFAULT 0",
             ["IsImportedToCrm"] = "INTEGER NOT NULL DEFAULT 0",
+            ["HasCriminalDisclosure"] = "INTEGER NOT NULL DEFAULT 0",
+            ["HasRegulatoryDisclosure"] = "INTEGER NOT NULL DEFAULT 0",
+            ["HasCivilDisclosure"] = "INTEGER NOT NULL DEFAULT 0",
+            ["HasCustomerComplaintDisclosure"] = "INTEGER NOT NULL DEFAULT 0",
+            ["HasFinancialDisclosure"] = "INTEGER NOT NULL DEFAULT 0",
+            ["HasTerminationDisclosure"] = "INTEGER NOT NULL DEFAULT 0",
+            ["BcDisclosureCount"] = "INTEGER NOT NULL DEFAULT 0",
+            ["IaDisclosureCount"] = "INTEGER NOT NULL DEFAULT 0",
+            ["BcScope"] = "TEXT",
+            ["IaScope"] = "TEXT",
+            ["CareerStartDate"] = "TEXT",
+            ["TotalFirmCount"] = "INTEGER",
+            ["BrokerCheckUrl"] = "TEXT",
         });
 
         AddMissingColumns("Firms", new Dictionary<string, string>
@@ -350,6 +377,17 @@ public class DatabaseContext : DbContext
             ["IsBrokerDealer"] = "INTEGER",
             ["IsInsuranceCompany"] = "INTEGER",
             ["IsExcluded"] = "INTEGER NOT NULL DEFAULT 0",
+            ["EdgarCik"] = "TEXT",
+            ["SicCode"] = "TEXT",
+            ["SicDescription"] = "TEXT",
+            ["FiscalYearEnd"] = "TEXT",
+        });
+
+        AddMissingColumns("EmploymentHistory", new Dictionary<string, string>
+        {
+            ["FirmCity"] = "TEXT",
+            ["FirmState"] = "TEXT",
+            ["RegistrationCategories"] = "TEXT",
         });
     }
 
@@ -392,6 +430,7 @@ public class DatabaseContext : DbContext
         Qualifications.ExecuteDelete();
         Disclosures.ExecuteDelete();
         EmploymentHistory.ExecuteDelete();
+        AdvisorRegistrations.ExecuteDelete();
         AdvisorListMembers.ExecuteDelete();
         AdvisorLists.ExecuteDelete();
         EdgarSearchResults.ExecuteDelete();
@@ -404,6 +443,6 @@ public class DatabaseContext : DbContext
         Advisors.ExecuteDelete();
         Firms.ExecuteDelete();
         Database.ExecuteSqlRaw(
-            "DELETE FROM sqlite_sequence WHERE name IN ('EdgarSearchResults','FirmFilings','FirmFilingEvents','AdvisorListMembers','AdvisorLists','Qualifications','Disclosures','EmploymentHistory','Advisors','Firms','FirmOwnership','FormAdvFilings','FirmAumHistory')");
+            "DELETE FROM sqlite_sequence WHERE name IN ('EdgarSearchResults','FirmFilings','FirmFilingEvents','AdvisorListMembers','AdvisorLists','Qualifications','Disclosures','EmploymentHistory','AdvisorRegistrations','Advisors','Firms','FirmOwnership','FormAdvFilings','FirmAumHistory')");
     }
 }

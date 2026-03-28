@@ -28,6 +28,9 @@ public class FirmDetailPanel : UserControl
     private ListView _ownershipListView = null!;
     private TableLayoutPanel _aumGrid = null!;
     private TableLayoutPanel _scoreGrid = null!;
+    private Button _btnViewAdvisors = null!;
+
+    public event EventHandler<string>? AdvisorNavigationRequested;
 
     public FirmDetailPanel()
     {
@@ -65,9 +68,10 @@ public class FirmDetailPanel : UserControl
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
             Padding = new Padding(0)
         };
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -122,6 +126,35 @@ public class FirmDetailPanel : UserControl
         header.Controls.Add(badgeFlow);
 
         mainLayout.Controls.Add(header, 0, 0);
+
+        // ── Action Buttons ──
+        var btnRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            Padding = new Padding(0, 4, 0, 6)
+        };
+        _btnViewAdvisors = new Button
+        {
+            Text = "View Advisors at this Firm",
+            BackColor = Color.FromArgb(0, 100, 200),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("Segoe UI", 9),
+            Height = 28,
+            AutoSize = true,
+            Padding = new Padding(10, 0, 10, 0),
+            Enabled = false
+        };
+        _btnViewAdvisors.FlatAppearance.BorderSize = 0;
+        _btnViewAdvisors.Click += (_, _) =>
+        {
+            if (_firm != null)
+                AdvisorNavigationRequested?.Invoke(this, _firm.CrdNumber);
+        };
+        btnRow.Controls.Add(_btnViewAdvisors);
+        mainLayout.Controls.Add(btnRow, 0, 1);
 
         // ── Tabbed content ──
         _tabs = new TabControl { Dock = DockStyle.Fill };
@@ -232,7 +265,7 @@ public class FirmDetailPanel : UserControl
         _tabs.TabPages.Add(tabOwnership);
         _tabs.TabPages.Add(tabScore);
 
-        mainLayout.Controls.Add(_tabs, 0, 1);
+        mainLayout.Controls.Add(_tabs, 0, 2);
         outer.Controls.Add(mainLayout);
         this.Controls.Add(outer);
     }
@@ -244,6 +277,7 @@ public class FirmDetailPanel : UserControl
         _lblCrd.Text = "";
         _lblStatusBadge.Visible = false;
         _lblBpBadge.Visible = false;
+        _btnViewAdvisors.Enabled = false;
         _infoGrid.Controls.Clear();
         _infoGrid.RowStyles.Clear();
         _aumGrid.Controls.Clear();
@@ -262,6 +296,7 @@ public class FirmDetailPanel : UserControl
         _lblCrd.Text = $"CRD: {firm.CrdNumber}" + (string.IsNullOrEmpty(firm.SECNumber) ? "" : $"  |  SEC: {firm.SECNumber}");
         _lblTypeBadge.Text = firm.RecordType ?? "Investment Advisor";
         _lblSourceBadge.Text = firm.Source ?? "SEC";
+        _btnViewAdvisors.Enabled = !string.IsNullOrEmpty(firm.CrdNumber);
 
         if (!string.IsNullOrEmpty(firm.RegistrationStatus))
         {

@@ -580,6 +580,118 @@ public class AdvisorRepositoryTests : IDisposable
         Assert.Equal("SRC01", results[0].CrdNumber);
     }
 
+    [Fact]
+    public void UpsertAdvisor_PersistsNewAdvisorFields()
+    {
+        var adv = MakeAdvisor("NEW01", "Rich", "Fields", "CA");
+        adv.Suffix = "Jr.";
+        adv.BcScope = "Active";
+        adv.IaScope = "Approved";
+        adv.BcDisclosureCount = 2;
+        adv.IaDisclosureCount = 1;
+        adv.HasCriminalDisclosure = true;
+        adv.HasRegulatoryDisclosure = false;
+        adv.HasCivilDisclosure = true;
+        adv.HasCustomerComplaintDisclosure = false;
+        adv.HasFinancialDisclosure = true;
+        adv.HasTerminationDisclosure = false;
+        adv.BrokerCheckUrl = "https://brokercheck.finra.org/individual/summary/NEW01";
+        adv.CareerStartDate = new DateTime(2005, 3, 15);
+        adv.TotalFirmCount = 4;
+        _repo.UpsertAdvisor(adv);
+
+        var loaded = _repo.GetAdvisorById(adv.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal("Jr.", loaded.Suffix);
+        Assert.Equal("Active", loaded.BcScope);
+        Assert.Equal("Approved", loaded.IaScope);
+        Assert.Equal(2, loaded.BcDisclosureCount);
+        Assert.Equal(1, loaded.IaDisclosureCount);
+        Assert.True(loaded.HasCriminalDisclosure);
+        Assert.False(loaded.HasRegulatoryDisclosure);
+        Assert.True(loaded.HasCivilDisclosure);
+        Assert.False(loaded.HasCustomerComplaintDisclosure);
+        Assert.True(loaded.HasFinancialDisclosure);
+        Assert.False(loaded.HasTerminationDisclosure);
+        Assert.Equal("https://brokercheck.finra.org/individual/summary/NEW01", loaded.BrokerCheckUrl);
+        Assert.Equal(new DateTime(2005, 3, 15), loaded.CareerStartDate);
+        Assert.Equal(4, loaded.TotalFirmCount);
+    }
+
+    [Fact]
+    public void UpsertAdvisor_PersistsRegistrations()
+    {
+        var adv = MakeAdvisor("REG01", "Reg", "Test", "NY");
+        adv.Registrations = new List<AdvisorRegistration>
+        {
+            new() { StateCode = "NY", RegistrationCategory = "IA", RegistrationStatus = "Active", StatusDate = "2020-01-15" },
+            new() { StateCode = "CA", RegistrationCategory = "BC", RegistrationStatus = "Active", StatusDate = "2021-06-01" }
+        };
+        _repo.UpsertAdvisor(adv);
+
+        var loaded = _repo.GetAdvisorById(adv.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal(2, loaded.Registrations.Count);
+        Assert.Contains(loaded.Registrations, r => r.StateCode == "NY" && r.RegistrationCategory == "IA");
+        Assert.Contains(loaded.Registrations, r => r.StateCode == "CA" && r.RegistrationCategory == "BC");
+    }
+
+    [Fact]
+    public void UpsertEmploymentHistory_PersistsFirmCityState()
+    {
+        var adv = MakeAdvisor("EMP01", "Emp", "Test", "TX");
+        adv.EmploymentHistory.Add(new EmploymentHistory
+        {
+            FirmName = "Test Firm",
+            FirmCrd = "111",
+            FirmCity = "Dallas",
+            FirmState = "TX",
+            Position = "Registered Representative"
+        });
+        _repo.UpsertAdvisor(adv);
+
+        var loaded = _repo.GetAdvisorById(adv.Id);
+        Assert.NotNull(loaded);
+        Assert.Single(loaded.EmploymentHistory);
+        Assert.Equal("Dallas", loaded.EmploymentHistory[0].FirmCity);
+        Assert.Equal("TX", loaded.EmploymentHistory[0].FirmState);
+    }
+
+    [Fact]
+    public void GetAdvisors_DisclosureTypeFilter_Criminal()
+    {
+        var adv1 = MakeAdvisor("DT01", "Criminal", "Disc");
+        adv1.HasDisclosures = true;
+        adv1.HasCriminalDisclosure = true;
+        _repo.UpsertAdvisor(adv1);
+
+        var adv2 = MakeAdvisor("DT02", "Regulatory", "Disc");
+        adv2.HasDisclosures = true;
+        adv2.HasRegulatoryDisclosure = true;
+        _repo.UpsertAdvisor(adv2);
+
+        var filter = new SearchFilter { DisclosureType = "Criminal", PageSize = 100 };
+        var results = _repo.GetAdvisors(filter);
+
+        Assert.Single(results);
+        Assert.Equal("DT01", results[0].CrdNumber);
+    }
+
+    [Fact]
+    public void GetAdvisors_DisclosureTypeFilter_CustomerComplaint()
+    {
+        var adv = MakeAdvisor("DT03", "Complaint", "Disc");
+        adv.HasDisclosures = true;
+        adv.HasCustomerComplaintDisclosure = true;
+        _repo.UpsertAdvisor(adv);
+
+        var filter = new SearchFilter { DisclosureType = "Customer Complaint", PageSize = 100 };
+        var results = _repo.GetAdvisors(filter);
+
+        Assert.Single(results);
+        Assert.Equal("DT03", results[0].CrdNumber);
+    }
+
     private static Advisor MakeAdvisor(string crd, string first, string last, string? state = null)
     {
         return new Advisor

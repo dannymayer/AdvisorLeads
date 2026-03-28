@@ -306,6 +306,7 @@ public class SecCompilationService
             var disclosureFlags = new List<string>();
             bool firstEmp = true;
             bool firstRegDate = true;
+            var registrations = new List<AdvisorRegistration>();
 
             while (reader.Read())
             {
@@ -347,7 +348,9 @@ public class SecCompilationService
                             advisor.EmploymentHistory.Add(new EmploymentHistory
                             {
                                 FirmName = empName,
-                                FirmCrd = reader.GetAttribute("orgPK")
+                                FirmCrd = reader.GetAttribute("orgPK"),
+                                FirmCity = reader.GetAttribute("city"),
+                                FirmState = reader.GetAttribute("state")
                                 // EndDate left null → IsCurrent == true
                             });
                         }
@@ -464,6 +467,36 @@ public class SecCompilationService
                                 Description = string.Join("; ", newFlags),
                                 Source = "SEC"
                             });
+
+                            foreach (var flag in newFlags)
+                            {
+                                if (flag == "Criminal") advisor.HasCriminalDisclosure = true;
+                                else if (flag.Contains("Regulatory") || flag == "Investigation") advisor.HasRegulatoryDisclosure = true;
+                                else if (flag.Contains("Civil")) advisor.HasCivilDisclosure = true;
+                                else if (flag == "Customer Complaint") advisor.HasCustomerComplaintDisclosure = true;
+                                else if (flag == "Bankruptcy" || flag == "Bond" || flag == "Judgment") advisor.HasFinancialDisclosure = true;
+                                else if (flag == "Termination") advisor.HasTerminationDisclosure = true;
+                            }
+                        }
+                        break;
+                    }
+
+                    case "IndlCntyRgstrtns":
+                        // container element; child CntyRgstn elements handled below
+                        break;
+
+                    case "CntyRgstn":
+                    {
+                        var stateCode = reader.GetAttribute("stCd") ?? reader.GetAttribute("state");
+                        if (!string.IsNullOrWhiteSpace(stateCode))
+                        {
+                            registrations.Add(new AdvisorRegistration
+                            {
+                                StateCode = stateCode,
+                                RegistrationCategory = reader.GetAttribute("rgstrtnCtgry") ?? reader.GetAttribute("category"),
+                                RegistrationStatus = reader.GetAttribute("st") ?? reader.GetAttribute("status"),
+                                StatusDate = reader.GetAttribute("stDt") ?? reader.GetAttribute("statusDate")
+                            });
                         }
                         break;
                     }
@@ -474,6 +507,22 @@ public class SecCompilationService
             advisor.Licenses = licenses.Count > 0 ? string.Join(", ", licenses) : null;
             advisor.DisclosureFlags = disclosureFlags.Count > 0 ? string.Join(",", disclosureFlags) : null;
             advisor.DisclosureCount = advisor.Disclosures.Count;
+
+            if (registrations.Count > 0)
+                advisor.Registrations = registrations;
+
+            var startDates = advisor.EmploymentHistory
+                .Where(h => h.StartDate.HasValue)
+                .Select(h => h.StartDate!.Value)
+                .ToList();
+            if (startDates.Count > 0)
+                advisor.CareerStartDate = startDates.Min();
+
+            advisor.TotalFirmCount = advisor.EmploymentHistory.Count > 0 ? advisor.EmploymentHistory.Count : (int?)null;
+            advisor.BrokerCheckUrl = !string.IsNullOrWhiteSpace(advisor.CrdNumber)
+                ? $"https://brokercheck.finra.org/individual/summary/{advisor.CrdNumber}"
+                : null;
+            advisor.BcDisclosureCount = advisor.Disclosures.Count;
 
             if (string.IsNullOrWhiteSpace(advisor.CrdNumber) ||
                 (string.IsNullOrWhiteSpace(advisor.FirstName) && string.IsNullOrWhiteSpace(advisor.LastName)))

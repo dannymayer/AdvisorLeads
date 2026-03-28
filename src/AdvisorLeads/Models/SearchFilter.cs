@@ -20,6 +20,7 @@ public class SearchFilter
     public int? MaxYearsExperience { get; set; }
     public string? City { get; set; }
     public int? MinDisclosureCount { get; set; }
+    public string? DisclosureType { get; set; }  // "Criminal", "Regulatory", "Civil", "Customer Complaint", "Financial", "Termination"
     public string? FirmRecordType { get; set; }
     public string? SortBy { get; set; } = "LastName";
     public bool SortDescending { get; set; } = false;

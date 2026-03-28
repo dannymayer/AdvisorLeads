@@ -19,6 +19,7 @@ public partial class FilterPanel : UserControl
     private ComboBox _cboSource = null!;
     private ComboBox _cboDisclosures = null!;
     private NumericUpDown _numMinDisclosures = null!;
+    private ComboBox _cboDisclosureType = null!;
     private ComboBox _cboCrm = null!;
     private CheckBox _chkShowExcluded = null!;
     private CheckBox _chkFavoritesOnly = null!;
@@ -28,6 +29,7 @@ public partial class FilterPanel : UserControl
     private System.Windows.Forms.Timer _debounceTimer = null!;
 
     private bool _suppressAutoApply;
+    private string? _firmCrdOverride;
 
     public FilterPanel()
     {
@@ -169,6 +171,15 @@ public partial class FilterPanel : UserControl
         _numMinDisclosures = MakeNumeric(0, 50, 0);
         layout.Controls.Add(_numMinDisclosures, 1, row++);
 
+        layout.Controls.Add(MakeLabel("Type:"), 0, row);
+        _cboDisclosureType = MakeCombo();
+        _cboDisclosureType.Items.AddRange(new[]
+        {
+            "(All)", "Criminal", "Regulatory", "Civil", "Customer Complaint", "Financial", "Termination"
+        });
+        _cboDisclosureType.SelectedIndex = 0;
+        layout.Controls.Add(_cboDisclosureType, 1, row++);
+
         // ── CRM & OTHER ────────────────────────────────────────────────────
         AddSectionHeader(layout, "CRM & OTHER", ref row);
 
@@ -309,7 +320,7 @@ public partial class FilterPanel : UserControl
             if (!_suppressAutoApply) FireFiltersChanged();
         };
 
-        foreach (var cbo in new[] { _cboState, _cboRecordType, _cboStatus, _cboSource, _cboDisclosures, _cboCrm })
+        foreach (var cbo in new[] { _cboState, _cboRecordType, _cboStatus, _cboSource, _cboDisclosures, _cboDisclosureType, _cboCrm })
             cbo.SelectedIndexChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
 
         _chkShowExcluded.CheckedChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
@@ -323,6 +334,7 @@ public partial class FilterPanel : UserControl
         {
             txt.TextChanged += (_, _) =>
             {
+                if (txt == _txtFirm) _firmCrdOverride = null;
                 if (!_suppressAutoApply) { _debounceTimer.Stop(); _debounceTimer.Start(); }
             };
             txt.KeyDown += (_, e) =>
@@ -423,6 +435,7 @@ public partial class FilterPanel : UserControl
         if (_cboSource.SelectedIndex > 0) count++;
         if (_cboDisclosures.SelectedIndex > 0) count++;
         if (_numMinDisclosures.Value > 0) count++;
+        if (_cboDisclosureType.SelectedIndex > 0) count++;
         if (_cboCrm.SelectedIndex > 0) count++;
         if (_chkShowExcluded.Checked) count++;
         if (_chkFavoritesOnly.Checked) count++;
@@ -461,11 +474,19 @@ public partial class FilterPanel : UserControl
             HasDisclosures = _cboDisclosures.SelectedIndex == 0 ? null
                            : _cboDisclosures.SelectedIndex == 1 ? true : false,
             MinDisclosureCount = _numMinDisclosures.Value > 0 ? (int)_numMinDisclosures.Value : null,
+            DisclosureType = _cboDisclosureType.SelectedIndex <= 0 ? null : _cboDisclosureType.SelectedItem?.ToString(),
+            FirmCrd = _firmCrdOverride,
             IsImportedToCrm = _cboCrm.SelectedIndex == 0 ? null
                             : _cboCrm.SelectedIndex == 1 ? true : false,
             IncludeExcluded = _chkShowExcluded.Checked,
             ShowFavoritesOnly = _chkFavoritesOnly.Checked
         };
+    }
+
+    public void SetFirmCrdOverride(string? crd)
+    {
+        _firmCrdOverride = crd;
+        UpdateFilterBadge();
     }
 
     public void SetFilter(SearchFilter filter)
@@ -486,6 +507,7 @@ public partial class FilterPanel : UserControl
             SetComboByValue(_cboSource, filter.Source);
             _cboDisclosures.SelectedIndex = filter.HasDisclosures == null ? 0 : filter.HasDisclosures.Value ? 1 : 2;
             _numMinDisclosures.Value = Math.Max(0, Math.Min(50, filter.MinDisclosureCount ?? 0));
+            SetComboByValue(_cboDisclosureType, filter.DisclosureType);
             _cboCrm.SelectedIndex = filter.IsImportedToCrm == null ? 0 : filter.IsImportedToCrm.Value ? 1 : 2;
             _chkShowExcluded.Checked = filter.IncludeExcluded;
             _chkFavoritesOnly.Checked = filter.ShowFavoritesOnly;
@@ -520,6 +542,7 @@ public partial class FilterPanel : UserControl
 
     private void ClearAllControls()
     {
+        _firmCrdOverride = null;
         _txtName.Clear();
         _txtCrd.Clear();
         _cboState.SelectedIndex = 0;
@@ -533,6 +556,7 @@ public partial class FilterPanel : UserControl
         _cboSource.SelectedIndex = 0;
         _cboDisclosures.SelectedIndex = 0;
         _numMinDisclosures.Value = 0;
+        _cboDisclosureType.SelectedIndex = 0;
         _cboCrm.SelectedIndex = 0;
         _chkShowExcluded.Checked = false;
         _chkFavoritesOnly.Checked = false;

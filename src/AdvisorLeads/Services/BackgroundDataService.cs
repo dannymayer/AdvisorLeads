@@ -23,6 +23,7 @@ public class BackgroundDataService
     private EdgarSubmissionsService? _edgarSubmissions;
     private EdgarSearchService? _edgarSearch;
     private FormAdvHistoricalService? _formAdvHistorical;
+    private SecBulkSubmissionsService? _secBulkSubmissions;
     private CancellationTokenSource? _cts;
     private Task? _refreshTask;
 
@@ -45,6 +46,7 @@ public class BackgroundDataService
     public void SetEdgarSubmissionsService(EdgarSubmissionsService s) => _edgarSubmissions = s;
     public void SetEdgarSearchService(EdgarSearchService s) => _edgarSearch = s;
     public void SetFormAdvHistoricalService(FormAdvHistoricalService s) => _formAdvHistorical = s;
+    public void SetSecBulkSubmissionsService(SecBulkSubmissionsService s) => _secBulkSubmissions = s;
 
     /// <summary>
     /// Returns true if the database has already been populated with advisor data.
@@ -296,6 +298,19 @@ public class BackgroundDataService
                     if (updated > 0)
                         progress.Report($"✓ Marked {updated} firms as Broker Protocol members.");
                 }
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* continue on error */ }
+
+        // SEC bulk submissions enrichment — runs once per day (cache guards against repeat downloads)
+        try
+        {
+            if (_secBulkSubmissions != null && !_secBulkSubmissions.IsCacheValid())
+            {
+                var enriched = await _secBulkSubmissions.SyncFirmMetadataAsync(progress, token);
+                if (enriched > 0)
+                    progress.Report($"✓ Enriched {enriched} firms with EDGAR SIC/metadata.");
             }
         }
         catch (OperationCanceledException) { throw; }

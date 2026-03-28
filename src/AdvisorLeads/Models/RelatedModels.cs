@@ -11,6 +11,19 @@ public class EmploymentHistory
     public bool IsCurrent => EndDate == null;
     public string? Position { get; set; }
     public string? Street { get; set; }  // branch office street address
+    public string? FirmCity { get; set; }
+    public string? FirmState { get; set; }
+    public string? RegistrationCategories { get; set; } // e.g. "IAR,RR"
+}
+
+public class AdvisorRegistration
+{
+    public int Id { get; set; }
+    public int AdvisorId { get; set; }
+    public string StateCode { get; set; } = string.Empty;
+    public string? RegistrationCategory { get; set; }  // "IA", "BC", etc.
+    public string? RegistrationStatus { get; set; }
+    public string? StatusDate { get; set; }
 }
 
 public class Disclosure
