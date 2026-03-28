@@ -200,6 +200,39 @@ public class BackgroundDataService
         }
         catch { /* continue on error */ }
 
+        // SEC Monthly firm CSV — run change detection + AUM snapshot before upsert
+        try
+        {
+            if (_secMonthly != null)
+            {
+                var latestUrl = await _secMonthly.GetLatestRegisteredAdvisersUrlAsync(token);
+                if (latestUrl != null)
+                {
+                    var firms = await _secMonthly.DownloadAndParseFirmsAsync(latestUrl, progress, token);
+                    if (firms.Count > 0)
+                    {
+                        if (_changeDetection != null)
+                        {
+                            var eventCount = _changeDetection.DetectChanges(firms, progress);
+                            if (eventCount > 0)
+                                progress.Report($"✓ Detected {eventCount} significant firm changes.");
+                        }
+
+                        _repo.UpsertFirmBatch(firms, progress);
+
+                        if (_aumAnalytics != null)
+                        {
+                            var snapshotCount = _aumAnalytics.SnapshotFirmData(firms, DateTime.Now);
+                            if (snapshotCount > 0)
+                                progress.Report($"✓ Recorded {snapshotCount:N0} AUM snapshots.");
+                        }
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* continue on error */ }
+
         // Enrich advisors with full detail (employment history, exams, registered states)
         try
         {
@@ -207,6 +240,19 @@ public class BackgroundDataService
             var enriched = await EnrichAdvisorsWithDetailAsync(progress, token, maxToProcess: maxEnrich);
             if (enriched > 0)
                 progress.Report($"✓ Enriched {enriched} advisor records with full employment/qualification detail.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* continue on error */ }
+
+        // SEC IAPD enrichment for advisors missing employment/qualification data
+        try
+        {
+            if (_secIapd != null)
+            {
+                var iapdCount = await _secIapd.EnrichBatchAsync(progress, token, activeOnly ? 200 : 100);
+                if (iapdCount > 0)
+                    progress.Report($"✓ Enriched {iapdCount} advisors via SEC IAPD.");
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch { /* continue on error */ }
@@ -220,6 +266,36 @@ public class BackgroundDataService
                     activeOnly ? 50 : 25, progress, token);
                 if (filingCount > 0)
                     progress.Report($"✓ Fetched {filingCount} new EDGAR filings.");
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* continue on error */ }
+
+        // EDGAR full-text M&A keyword search scan
+        try
+        {
+            if (_edgarSearch != null)
+            {
+                var searchCount = await _edgarSearch.RunMaSearchScanAsync(progress, token);
+                if (searchCount > 0)
+                    progress.Report($"✓ Found {searchCount} EDGAR M&A keyword matches.");
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* continue on error */ }
+
+        // Broker Protocol weekly update
+        try
+        {
+            if (_brokerProtocol != null)
+            {
+                var names = await _brokerProtocol.FetchMemberNamesAsync(token);
+                if (names.Count >= 5)
+                {
+                    var updated = _repo.UpdateBrokerProtocolStatus(names, DateTime.UtcNow);
+                    if (updated > 0)
+                        progress.Report($"✓ Marked {updated} firms as Broker Protocol members.");
+                }
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -503,6 +579,69 @@ public class BackgroundDataService
         catch (Exception ex)
         {
             progress?.Report($"Form ADV historical import failed: {ex.Message}");
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Downloads and parses the SEC IAPD compilation files (firms XML).
+    /// This is a large download (~100 MB) and provides the richest firm data
+    /// (AUM, compensation, custody, client types, private funds, etc.).
+    /// </summary>
+    public async Task<int> RunSecCompilationFirmImportAsync(
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var firms = await _sec.DownloadAndParseFirmsAsync(progress, ct);
+            if (firms.Count > 0)
+            {
+                _repo.UpsertFirmBatch(firms, progress);
+                DataUpdated?.Invoke();
+            }
+            return firms.Count;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            progress?.Report($"SEC compilation firm import failed: {ex.Message}");
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Downloads and parses the SEC IAPD compilation individuals XML.
+    /// Provides investment advisor representative records with qualifications,
+    /// employment history, registrations, and disclosure flags.
+    /// </summary>
+    public async Task<int> RunSecCompilationIndividualImportAsync(
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var advisors = await _sec.DownloadAndParseIndividualsAsync(progress, ct);
+            if (advisors.Count > 0)
+            {
+                int saved = 0;
+                foreach (var advisor in advisors)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    try { _repo.UpsertAdvisor(advisor); saved++; } catch { }
+                    if (saved % 5000 == 0 && saved > 0)
+                        progress?.Report($"SEC Individuals: Saved {saved:N0} of {advisors.Count:N0}...");
+                }
+                progress?.Report($"✓ SEC Individuals: Saved {saved:N0} advisor records.");
+                DataUpdated?.Invoke();
+                return saved;
+            }
+            return 0;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            progress?.Report($"SEC compilation individual import failed: {ex.Message}");
             return 0;
         }
     }

@@ -240,6 +240,52 @@ public class DatabaseContextTests : IDisposable
         Assert.Equal(0, ctx.Qualifications.Count());
     }
 
+    [Fact]
+    public void InitializeDatabase_CreatesSingleColumnIndices()
+    {
+        using var ctx = new DatabaseContext(_dbPath);
+        ctx.InitializeDatabase();
+
+        var indices = GetIndexNames(ctx);
+
+        // Advisor single-column indices
+        Assert.Contains(indices, i => i.Contains("LastName", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("State", StringComparison.OrdinalIgnoreCase)
+            && i.Contains("Advisor", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("City", StringComparison.OrdinalIgnoreCase)
+            && i.Contains("Advisor", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("CurrentFirmName", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("IsExcluded", StringComparison.OrdinalIgnoreCase)
+            && i.Contains("Advisor", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("IsFavorited", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("HasDisclosures", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("IsImportedToCrm", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("YearsOfExperience", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("DisclosureCount", StringComparison.OrdinalIgnoreCase));
+
+        // Firm single-column indices
+        Assert.Contains(indices, i => i.Contains("Name", StringComparison.OrdinalIgnoreCase)
+            && i.Contains("Firm", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("BrokerProtocolMember", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(indices, i => i.Contains("RegulatoryAum", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void InitializeDatabase_SetsSynchronousNormal()
+    {
+        using var ctx = new DatabaseContext(_dbPath);
+        ctx.InitializeDatabase();
+
+        var conn = ctx.Database.GetDbConnection();
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA synchronous";
+        var result = Convert.ToInt32(cmd.ExecuteScalar());
+
+        // NORMAL = 1
+        Assert.Equal(1, result);
+    }
+
     private static List<string> GetTableNames(DatabaseContext ctx)
     {
         var tables = new List<string>();
@@ -262,5 +308,18 @@ public class DatabaseContextTests : IDisposable
         while (reader.Read())
             cols.Add(reader.GetString(1));
         return cols;
+    }
+
+    private static List<string> GetIndexNames(DatabaseContext ctx)
+    {
+        var indices = new List<string>();
+        var conn = ctx.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open) conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            indices.Add(reader.GetString(0));
+        return indices;
     }
 }

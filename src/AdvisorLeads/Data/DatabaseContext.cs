@@ -39,7 +39,14 @@ public class DatabaseContext : DbContext
             e.ToTable("Firms");
             e.HasKey(f => f.Id);
             e.HasIndex(f => f.CrdNumber).IsUnique();
+            e.HasIndex(f => f.Name);
+            e.HasIndex(f => f.City);
+            e.HasIndex(f => f.RecordType);
+            e.HasIndex(f => f.BrokerProtocolMember);
+            e.HasIndex(f => f.IsExcluded);
+            e.HasIndex(f => f.RegulatoryAum);
             e.HasIndex(f => new { f.State, f.RegistrationStatus, f.Name });
+            e.HasIndex(f => new { f.IsExcluded, f.State, f.RecordType });
 
             e.Property(f => f.IsRegisteredWithSec).HasDefaultValue(false);
             e.Property(f => f.IsRegisteredWithFinra).HasDefaultValue(false);
@@ -68,7 +75,17 @@ public class DatabaseContext : DbContext
             e.HasIndex(a => a.CurrentFirmCrd);
             e.HasIndex(a => a.RecordType);
             e.HasIndex(a => a.Source);
+            e.HasIndex(a => a.City);
+            e.HasIndex(a => a.CurrentFirmName);
+            e.HasIndex(a => a.IsExcluded);
+            e.HasIndex(a => a.IsFavorited);
+            e.HasIndex(a => a.HasDisclosures);
+            e.HasIndex(a => a.IsImportedToCrm);
+            e.HasIndex(a => a.YearsOfExperience);
+            e.HasIndex(a => a.DisclosureCount);
             e.HasIndex(a => new { a.State, a.RecordType, a.RegistrationStatus, a.LastName });
+            e.HasIndex(a => new { a.IsExcluded, a.IsFavorited });
+            e.HasIndex(a => new { a.IsExcluded, a.LastName });
 
             e.Property(a => a.HasDisclosures).HasDefaultValue(false);
             e.Property(a => a.DisclosureCount).HasDefaultValue(0);
@@ -240,6 +257,8 @@ public class DatabaseContext : DbContext
         Database.ExecuteSqlRaw("PRAGMA cache_size=-8000");
         Database.ExecuteSqlRaw("PRAGMA temp_store=MEMORY");
         Database.ExecuteSqlRaw("PRAGMA mmap_size=268435456");
+        Database.ExecuteSqlRaw("PRAGMA synchronous=NORMAL");
+        Database.ExecuteSqlRaw("PRAGMA optimize");
     }
 
     /// <summary>

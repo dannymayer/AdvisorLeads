@@ -68,6 +68,16 @@ public class ModelTests
     }
 
     [Fact]
+    public void SearchFilter_DefaultPageSize_Is500()
+    {
+        var filter = new SearchFilter();
+        Assert.Equal(500, filter.PageSize);
+        Assert.Equal(1, filter.PageNumber);
+        Assert.Equal("LastName", filter.SortBy);
+        Assert.False(filter.SortDescending);
+    }
+
+    [Fact]
     public void FirmSearchFilter_Defaults_AreNull()
     {
         var filter = new FirmSearchFilter();
@@ -76,6 +86,16 @@ public class ModelTests
         Assert.Null(filter.RecordType);
         Assert.Null(filter.MinRegulatoryAum);
         Assert.False(filter.BrokerProtocolOnly);
+    }
+
+    [Fact]
+    public void FirmSearchFilter_PaginationDefaults_AreSet()
+    {
+        var filter = new FirmSearchFilter();
+        Assert.Equal(5000, filter.PageSize);
+        Assert.Equal(1, filter.PageNumber);
+        Assert.Equal("Name", filter.SortBy);
+        Assert.False(filter.SortDescending);
     }
 
     [Fact]

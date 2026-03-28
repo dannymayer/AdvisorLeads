@@ -60,6 +60,7 @@ public class MainForm : Form
         new(StringComparer.OrdinalIgnoreCase);
     private ToolStripButton _btnPrevPage = null!;
     private ToolStripButton _btnNextPage = null!;
+    private CancellationTokenSource? _searchCts;
 
     public MainForm()
     {
@@ -497,6 +498,10 @@ public class MainForm : Form
 
     private async void LoadAdvisorsPageAsync(int page)
     {
+        _searchCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+
         SetStatus("Loading...");
         _filterPanel.Enabled = false;
         _btnPrevPage.Enabled = false;
@@ -511,11 +516,13 @@ public class MainForm : Form
             int total = 0;
             await Task.Run(() =>
             {
-                advisors = _repo.GetAdvisors(filter);
-                total = advisors.Count < filter.PageSize
-                    ? (page - 1) * filter.PageSize + advisors.Count
-                    : _repo.GetAdvisorCount(filter);
-            });
+                cts.Token.ThrowIfCancellationRequested();
+                var result = _repo.GetAdvisorsWithCount(filter);
+                advisors = result.Advisors;
+                total = result.TotalCount;
+            }, cts.Token);
+
+            if (cts.Token.IsCancellationRequested) return;
 
             _currentAdvisors = advisors;
             _totalAdvisorCount = total;
@@ -530,9 +537,14 @@ public class MainForm : Form
             _btnPrevPage.Enabled = page > 1;
             _btnNextPage.Enabled = page < totalPages;
         }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer search — ignore
+        }
         catch (Exception ex)
         {
-            SetStatus($"Error loading advisors: {ex.Message}");
+            if (!cts.Token.IsCancellationRequested)
+                SetStatus($"Error loading advisors: {ex.Message}");
         }
         finally
         {
@@ -694,6 +706,30 @@ public class MainForm : Form
                 var progress = new Progress<string>(msg => BeginInvoke(() => SetStatus(msg)));
                 await _bgData.RunFormAdvHistoricalImportAsync(
                     LoadSetting, SaveSetting, progress, CancellationToken.None);
+            }
+            catch { /* non-critical */ }
+        });
+
+        // SEC IAPD compilation: import firm data (AUM, compensation, custody, clients)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var progress = new Progress<string>(msg => BeginInvoke(() => SetStatus(msg)));
+                await _bgData.RunSecCompilationFirmImportAsync(progress, CancellationToken.None);
+                BeginInvoke(() => LoadFirms());
+            }
+            catch { /* non-critical */ }
+        });
+
+        // SEC IAPD compilation: import individual advisor data (IARs)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var progress = new Progress<string>(msg => BeginInvoke(() => SetStatus(msg)));
+                await _bgData.RunSecCompilationIndividualImportAsync(progress, CancellationToken.None);
+                BeginInvoke(() => LoadAdvisors());
             }
             catch { /* non-critical */ }
         });

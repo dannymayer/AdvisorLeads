@@ -20,17 +20,44 @@ public class AdvisorRepository
     public List<Advisor> GetAdvisors(SearchFilter filter)
     {
         using var ctx = CreateContext();
-        IQueryable<Advisor> query = ctx.Advisors.AsNoTracking();
+        var query = ApplyAdvisorFilters(ctx.Advisors.AsNoTracking(), filter);
+        return ApplyAdvisorSort(query, filter)
+            .Skip((filter.PageNumber - 1) * filter.PageSize)
+            .Take(filter.PageSize)
+            .ToList();
+    }
 
+    public (List<Advisor> Advisors, int TotalCount) GetAdvisorsWithCount(SearchFilter filter)
+    {
+        using var ctx = CreateContext();
+        var query = ApplyAdvisorFilters(ctx.Advisors.AsNoTracking(), filter);
+        int total = query.Count();
+        var results = ApplyAdvisorSort(query, filter)
+            .Skip((filter.PageNumber - 1) * filter.PageSize)
+            .Take(filter.PageSize)
+            .ToList();
+        return (results, total);
+    }
+
+    private static IQueryable<Advisor> ApplyAdvisorFilters(IQueryable<Advisor> query, SearchFilter filter)
+    {
         if (!filter.IncludeExcluded)
             query = query.Where(a => !a.IsExcluded);
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
         {
-            var pattern = $"%{filter.NameQuery}%";
-            query = query.Where(a =>
-                EF.Functions.Like(a.FirstName, pattern) ||
-                EF.Functions.Like(a.LastName, pattern));
+            var term = filter.NameQuery.Trim();
+            if (term.Length >= 3 && term.All(char.IsDigit))
+            {
+                query = query.Where(a => a.CrdNumber == term);
+            }
+            else
+            {
+                var pattern = $"%{term}%";
+                query = query.Where(a =>
+                    EF.Functions.Like(a.FirstName, pattern) ||
+                    EF.Functions.Like(a.LastName, pattern));
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(filter.State))
@@ -98,7 +125,12 @@ public class AdvisorRepository
         if (filter.ShowFavoritesOnly)
             query = query.Where(a => a.IsFavorited);
 
-        IOrderedQueryable<Advisor> ordered = filter.SortBy switch
+        return query;
+    }
+
+    private static IOrderedQueryable<Advisor> ApplyAdvisorSort(IQueryable<Advisor> query, SearchFilter filter)
+    {
+        return filter.SortBy switch
         {
             "FirstName" => filter.SortDescending ? query.OrderByDescending(a => a.FirstName) : query.OrderBy(a => a.FirstName),
             "State" => filter.SortDescending ? query.OrderByDescending(a => a.State) : query.OrderBy(a => a.State),
@@ -106,20 +138,16 @@ public class AdvisorRepository
             "RegistrationStatus" => filter.SortDescending ? query.OrderByDescending(a => a.RegistrationStatus) : query.OrderBy(a => a.RegistrationStatus),
             "RecordType" => filter.SortDescending ? query.OrderByDescending(a => a.RecordType) : query.OrderBy(a => a.RecordType),
             "YearsOfExperience" => filter.SortDescending ? query.OrderByDescending(a => a.YearsOfExperience) : query.OrderBy(a => a.YearsOfExperience),
+            "DisclosureCount" => filter.SortDescending ? query.OrderByDescending(a => a.DisclosureCount) : query.OrderBy(a => a.DisclosureCount),
             "UpdatedAt" => filter.SortDescending ? query.OrderByDescending(a => a.UpdatedAt) : query.OrderBy(a => a.UpdatedAt),
             _ => filter.SortDescending ? query.OrderByDescending(a => a.LastName) : query.OrderBy(a => a.LastName),
         };
-
-        return ordered
-            .Skip((filter.PageNumber - 1) * filter.PageSize)
-            .Take(filter.PageSize)
-            .ToList();
     }
 
     public Advisor? GetAdvisorById(int id)
     {
         using var ctx = CreateContext();
-        return ctx.Advisors
+        return ctx.Advisors.AsNoTracking()
             .Include(a => a.EmploymentHistory)
             .Include(a => a.Disclosures)
             .Include(a => a.QualificationList)
@@ -408,9 +436,32 @@ public class AdvisorRepository
     {
         using var ctx = CreateContext();
         filter ??= new FirmSearchFilter();
+        var query = ApplyFirmFilters(ctx.Firms.AsNoTracking(), filter);
+        var ordered = ApplyFirmSort(query, filter);
+        if (filter.PageSize > 0)
+            return ordered
+                .Skip((filter.PageNumber - 1) * filter.PageSize)
+                .Take(filter.PageSize)
+                .ToList();
+        return ordered.ToList();
+    }
 
-        IQueryable<Firm> query = ctx.Firms.AsNoTracking()
-            .Where(f => !f.IsExcluded);
+    public (List<Firm> Firms, int TotalCount) GetFirmsWithCount(FirmSearchFilter? filter = null)
+    {
+        using var ctx = CreateContext();
+        filter ??= new FirmSearchFilter();
+        var query = ApplyFirmFilters(ctx.Firms.AsNoTracking(), filter);
+        int total = query.Count();
+        var results = ApplyFirmSort(query, filter)
+            .Skip((filter.PageNumber - 1) * filter.PageSize)
+            .Take(filter.PageSize)
+            .ToList();
+        return (results, total);
+    }
+
+    private static IQueryable<Firm> ApplyFirmFilters(IQueryable<Firm> query, FirmSearchFilter filter)
+    {
+        query = query.Where(f => !f.IsExcluded);
 
         if (!string.IsNullOrWhiteSpace(filter.NameQuery))
         {
@@ -432,17 +483,36 @@ public class AdvisorRepository
             query = query.Where(f => f.BrokerProtocolMember);
         if (filter.MinRegulatoryAum.HasValue)
             query = query.Where(f => f.RegulatoryAum >= filter.MinRegulatoryAum.Value);
+        if (filter.HasCustody.HasValue)
+            query = query.Where(f => f.HasCustody == filter.HasCustody.Value);
+        if (filter.HasDiscretionaryAuthority.HasValue)
+            query = query.Where(f => f.HasDiscretionaryAuthority == filter.HasDiscretionaryAuthority.Value);
+        if (!string.IsNullOrWhiteSpace(filter.CompensationType))
+        {
+            if (filter.CompensationType == "Fee-Only")
+                query = query.Where(f => f.CompensationFeeOnly == true);
+            else if (filter.CompensationType == "Commission")
+                query = query.Where(f => f.CompensationCommission == true);
+            else if (filter.CompensationType == "Both")
+                query = query.Where(f => f.CompensationFeeOnly == true && f.CompensationCommission == true);
+        }
+        if (filter.MinPrivateFunds.HasValue && filter.MinPrivateFunds.Value > 0)
+            query = query.Where(f => f.PrivateFundCount >= filter.MinPrivateFunds.Value);
 
-        IOrderedQueryable<Firm> ordered = filter.SortBy switch
+        return query;
+    }
+
+    private static IOrderedQueryable<Firm> ApplyFirmSort(IQueryable<Firm> query, FirmSearchFilter filter)
+    {
+        return filter.SortBy switch
         {
             "State" => filter.SortDescending ? query.OrderByDescending(f => f.State) : query.OrderBy(f => f.State),
             "NumberOfAdvisors" => filter.SortDescending ? query.OrderByDescending(f => f.NumberOfAdvisors) : query.OrderBy(f => f.NumberOfAdvisors),
+            "RegulatoryAum" => filter.SortDescending ? query.OrderByDescending(f => f.RegulatoryAum) : query.OrderBy(f => f.RegulatoryAum),
             "RegistrationDate" => filter.SortDescending ? query.OrderByDescending(f => f.RegistrationDate) : query.OrderBy(f => f.RegistrationDate),
             "UpdatedAt" => filter.SortDescending ? query.OrderByDescending(f => f.UpdatedAt) : query.OrderBy(f => f.UpdatedAt),
             _ => filter.SortDescending ? query.OrderByDescending(f => f.Name) : query.OrderBy(f => f.Name),
         };
-
-        return ordered.ToList();
     }
 
     public int UpsertFirm(Firm firm)
@@ -467,6 +537,7 @@ public class AdvisorRepository
             existing.IsRegisteredWithSec = firm.IsRegisteredWithSec;
             existing.IsRegisteredWithFinra = firm.IsRegisteredWithFinra;
             existing.NumberOfAdvisors = firm.NumberOfAdvisors;
+            existing.NumberOfEmployees = firm.NumberOfEmployees ?? existing.NumberOfEmployees;
             existing.RegistrationDate = firm.RegistrationDate;
             existing.Source = firm.Source;
             existing.RecordType = firm.RecordType;
@@ -478,9 +549,32 @@ public class AdvisorRepository
             existing.RegistrationStatus = firm.RegistrationStatus;
             existing.AumDescription = firm.AumDescription;
             existing.StateOfOrganization = firm.StateOfOrganization;
+            existing.Country = firm.Country ?? existing.Country;
+            existing.LatestFilingDate = firm.LatestFilingDate ?? existing.LatestFilingDate;
             existing.RegulatoryAum = firm.RegulatoryAum;
             existing.RegulatoryAumNonDiscretionary = firm.RegulatoryAumNonDiscretionary;
+            existing.TotalAumRelatedPersons = firm.TotalAumRelatedPersons ?? existing.TotalAumRelatedPersons;
             existing.NumClients = firm.NumClients;
+            existing.ClientsIndividuals = firm.ClientsIndividuals ?? existing.ClientsIndividuals;
+            existing.ClientsHighNetWorth = firm.ClientsHighNetWorth ?? existing.ClientsHighNetWorth;
+            existing.ClientsBankingInstitutions = firm.ClientsBankingInstitutions ?? existing.ClientsBankingInstitutions;
+            existing.ClientsInvestmentCompanies = firm.ClientsInvestmentCompanies ?? existing.ClientsInvestmentCompanies;
+            existing.ClientsPensionPlans = firm.ClientsPensionPlans ?? existing.ClientsPensionPlans;
+            existing.ClientsCharitable = firm.ClientsCharitable ?? existing.ClientsCharitable;
+            existing.ClientsGovernment = firm.ClientsGovernment ?? existing.ClientsGovernment;
+            existing.ClientsOther = firm.ClientsOther ?? existing.ClientsOther;
+            existing.NumberOfOffices = firm.NumberOfOffices ?? existing.NumberOfOffices;
+            existing.PrivateFundCount = firm.PrivateFundCount ?? existing.PrivateFundCount;
+            existing.PrivateFundGrossAssets = firm.PrivateFundGrossAssets ?? existing.PrivateFundGrossAssets;
+            existing.AdvisoryActivities = firm.AdvisoryActivities ?? existing.AdvisoryActivities;
+            existing.CompensationFeeOnly = firm.CompensationFeeOnly ?? existing.CompensationFeeOnly;
+            existing.CompensationCommission = firm.CompensationCommission ?? existing.CompensationCommission;
+            existing.CompensationHourly = firm.CompensationHourly ?? existing.CompensationHourly;
+            existing.CompensationPerformanceBased = firm.CompensationPerformanceBased ?? existing.CompensationPerformanceBased;
+            existing.HasCustody = firm.HasCustody ?? existing.HasCustody;
+            existing.HasDiscretionaryAuthority = firm.HasDiscretionaryAuthority ?? existing.HasDiscretionaryAuthority;
+            existing.IsBrokerDealer = firm.IsBrokerDealer ?? existing.IsBrokerDealer;
+            existing.IsInsuranceCompany = firm.IsInsuranceCompany ?? existing.IsInsuranceCompany;
             existing.BrokerProtocolMember = firm.BrokerProtocolMember;
             existing.BrokerProtocolUpdatedAt = firm.BrokerProtocolUpdatedAt;
             existing.UpdatedAt = DateTime.UtcNow;
@@ -517,6 +611,14 @@ public class AdvisorRepository
                 RecordType, RegistrationStatus, RegistrationDate, LatestFilingDate,
                 NumberOfAdvisors, NumberOfEmployees, AumDescription,
                 RegulatoryAum, RegulatoryAumNonDiscretionary, NumClients,
+                TotalAumRelatedPersons, NumberOfOffices, PrivateFundCount, PrivateFundGrossAssets,
+                AdvisoryActivities, CompensationFeeOnly, CompensationCommission,
+                CompensationHourly, CompensationPerformanceBased,
+                HasCustody, HasDiscretionaryAuthority,
+                IsBrokerDealer, IsInsuranceCompany,
+                ClientsIndividuals, ClientsHighNetWorth, ClientsBankingInstitutions,
+                ClientsInvestmentCompanies, ClientsPensionPlans, ClientsCharitable,
+                ClientsGovernment, ClientsOther,
                 IsRegisteredWithSec, Source, CreatedAt, UpdatedAt)
             VALUES (@crd, @name, @legal, @sec, @region,
                 @addr, @city, @state, @country, @zip, @phone, @fax, @web,
@@ -524,6 +626,14 @@ public class AdvisorRepository
                 @rectype, @regstatus, @regdate, @filingdate,
                 @numadv, @numemp, @aum,
                 @regaum, @regaumnd, @numclients,
+                @totalaumrel, @numoffices, @privfundcount, @privfundassets,
+                @advactivities, @compfee, @compcomm,
+                @comphr, @compperf,
+                @custody, @discretion,
+                @isbd, @isins,
+                @clindiv, @clhnw, @clbank,
+                @clinvest, @clpension, @clcharitable,
+                @clgov, @clother,
                 1, 'SEC', datetime('now'), datetime('now'))
             ON CONFLICT(CrdNumber) DO UPDATE SET
                 Name               = excluded.Name,
@@ -551,6 +661,27 @@ public class AdvisorRepository
                 RegulatoryAum      = coalesce(excluded.RegulatoryAum, RegulatoryAum),
                 RegulatoryAumNonDiscretionary = coalesce(excluded.RegulatoryAumNonDiscretionary, RegulatoryAumNonDiscretionary),
                 NumClients         = coalesce(excluded.NumClients, NumClients),
+                TotalAumRelatedPersons = coalesce(excluded.TotalAumRelatedPersons, TotalAumRelatedPersons),
+                NumberOfOffices    = coalesce(excluded.NumberOfOffices, NumberOfOffices),
+                PrivateFundCount   = coalesce(excluded.PrivateFundCount, PrivateFundCount),
+                PrivateFundGrossAssets = coalesce(excluded.PrivateFundGrossAssets, PrivateFundGrossAssets),
+                AdvisoryActivities = coalesce(excluded.AdvisoryActivities, AdvisoryActivities),
+                CompensationFeeOnly = coalesce(excluded.CompensationFeeOnly, CompensationFeeOnly),
+                CompensationCommission = coalesce(excluded.CompensationCommission, CompensationCommission),
+                CompensationHourly = coalesce(excluded.CompensationHourly, CompensationHourly),
+                CompensationPerformanceBased = coalesce(excluded.CompensationPerformanceBased, CompensationPerformanceBased),
+                HasCustody         = coalesce(excluded.HasCustody, HasCustody),
+                HasDiscretionaryAuthority = coalesce(excluded.HasDiscretionaryAuthority, HasDiscretionaryAuthority),
+                IsBrokerDealer     = coalesce(excluded.IsBrokerDealer, IsBrokerDealer),
+                IsInsuranceCompany = coalesce(excluded.IsInsuranceCompany, IsInsuranceCompany),
+                ClientsIndividuals = coalesce(excluded.ClientsIndividuals, ClientsIndividuals),
+                ClientsHighNetWorth = coalesce(excluded.ClientsHighNetWorth, ClientsHighNetWorth),
+                ClientsBankingInstitutions = coalesce(excluded.ClientsBankingInstitutions, ClientsBankingInstitutions),
+                ClientsInvestmentCompanies = coalesce(excluded.ClientsInvestmentCompanies, ClientsInvestmentCompanies),
+                ClientsPensionPlans = coalesce(excluded.ClientsPensionPlans, ClientsPensionPlans),
+                ClientsCharitable  = coalesce(excluded.ClientsCharitable, ClientsCharitable),
+                ClientsGovernment  = coalesce(excluded.ClientsGovernment, ClientsGovernment),
+                ClientsOther       = coalesce(excluded.ClientsOther, ClientsOther),
                 IsRegisteredWithSec = 1,
                 Source             = 'SEC',
                 UpdatedAt          = datetime('now')
@@ -595,6 +726,27 @@ public class AdvisorRepository
             AddParam("@regaum", f.RegulatoryAum);
             AddParam("@regaumnd", f.RegulatoryAumNonDiscretionary);
             AddParam("@numclients", f.NumClients);
+            AddParam("@totalaumrel", f.TotalAumRelatedPersons);
+            AddParam("@numoffices", f.NumberOfOffices);
+            AddParam("@privfundcount", f.PrivateFundCount);
+            AddParam("@privfundassets", f.PrivateFundGrossAssets);
+            AddParam("@advactivities", f.AdvisoryActivities);
+            AddParam("@compfee", f.CompensationFeeOnly);
+            AddParam("@compcomm", f.CompensationCommission);
+            AddParam("@comphr", f.CompensationHourly);
+            AddParam("@compperf", f.CompensationPerformanceBased);
+            AddParam("@custody", f.HasCustody);
+            AddParam("@discretion", f.HasDiscretionaryAuthority);
+            AddParam("@isbd", f.IsBrokerDealer);
+            AddParam("@isins", f.IsInsuranceCompany);
+            AddParam("@clindiv", f.ClientsIndividuals);
+            AddParam("@clhnw", f.ClientsHighNetWorth);
+            AddParam("@clbank", f.ClientsBankingInstitutions);
+            AddParam("@clinvest", f.ClientsInvestmentCompanies);
+            AddParam("@clpension", f.ClientsPensionPlans);
+            AddParam("@clcharitable", f.ClientsCharitable);
+            AddParam("@clgov", f.ClientsGovernment);
+            AddParam("@clother", f.ClientsOther);
             cmd.ExecuteNonQuery();
             count++;
             if (count % 1000 == 0)
@@ -642,85 +794,7 @@ public class AdvisorRepository
     public int GetAdvisorCount(SearchFilter filter)
     {
         using var ctx = CreateContext();
-        IQueryable<Advisor> query = ctx.Advisors.AsNoTracking();
-
-        if (!filter.IncludeExcluded)
-            query = query.Where(a => !a.IsExcluded);
-
-        if (!string.IsNullOrWhiteSpace(filter.NameQuery))
-        {
-            var pattern = $"%{filter.NameQuery}%";
-            query = query.Where(a =>
-                EF.Functions.Like(a.FirstName, pattern) ||
-                EF.Functions.Like(a.LastName, pattern));
-        }
-
-        if (!string.IsNullOrWhiteSpace(filter.State))
-            query = query.Where(a => a.State == filter.State);
-
-        if (!string.IsNullOrWhiteSpace(filter.FirmName))
-        {
-            var pattern = $"%{filter.FirmName}%";
-            query = query.Where(a => EF.Functions.Like(a.CurrentFirmName!, pattern));
-        }
-
-        if (!string.IsNullOrWhiteSpace(filter.FirmCrd))
-            query = query.Where(a => a.CurrentFirmCrd == filter.FirmCrd);
-
-        if (!string.IsNullOrWhiteSpace(filter.CrdNumber))
-            query = query.Where(a => a.CrdNumber == filter.CrdNumber);
-
-        if (!string.IsNullOrWhiteSpace(filter.RegistrationStatus))
-            query = query.Where(a => EF.Functions.Like(a.RegistrationStatus!, filter.RegistrationStatus));
-
-        if (!string.IsNullOrWhiteSpace(filter.LicenseType))
-        {
-            var pattern = $"%{filter.LicenseType}%";
-            query = query.Where(a => EF.Functions.Like(a.Licenses!, pattern));
-        }
-
-        if (filter.HasDisclosures.HasValue)
-            query = query.Where(a => a.HasDisclosures == filter.HasDisclosures.Value);
-
-        if (filter.IsImportedToCrm.HasValue)
-            query = query.Where(a => a.IsImportedToCrm == filter.IsImportedToCrm.Value);
-
-        if (!string.IsNullOrWhiteSpace(filter.Source))
-        {
-            if (filter.Source.Equals("Both", StringComparison.OrdinalIgnoreCase)
-                || filter.Source.Contains(','))
-            {
-                query = query.Where(a => a.Source != null && a.Source.Contains("FINRA") && a.Source.Contains("SEC"));
-            }
-            else
-            {
-                var pattern = $"%{filter.Source}%";
-                query = query.Where(a => EF.Functions.Like(a.Source!, pattern));
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(filter.RecordType))
-            query = query.Where(a => a.RecordType == filter.RecordType);
-
-        if (filter.MinYearsExperience.HasValue)
-            query = query.Where(a => a.YearsOfExperience >= filter.MinYearsExperience.Value);
-
-        if (filter.MaxYearsExperience.HasValue)
-            query = query.Where(a => a.YearsOfExperience <= filter.MaxYearsExperience.Value);
-
-        if (!string.IsNullOrWhiteSpace(filter.City))
-        {
-            var pattern = $"%{filter.City}%";
-            query = query.Where(a => EF.Functions.Like(a.City!, pattern));
-        }
-
-        if (filter.MinDisclosureCount.HasValue && filter.MinDisclosureCount.Value > 0)
-            query = query.Where(a => a.DisclosureCount >= filter.MinDisclosureCount.Value);
-
-        if (filter.ShowFavoritesOnly)
-            query = query.Where(a => a.IsFavorited);
-
-        return query.Count();
+        return ApplyAdvisorFilters(ctx.Advisors.AsNoTracking(), filter).Count();
     }
 
     /// <summary>
@@ -775,5 +849,55 @@ public class AdvisorRepository
         }
 
         return updated;
+    }
+
+    // ── Dashboard & Cross-Navigation ──────────────────────────────────
+
+    public (int TotalAdvisors, int TotalFirms, int Favorites, int InCrm,
+            int WithDisclosures, int FavsNotInCrm, int UpdatedToday) GetDashboardStats()
+    {
+        using var ctx = CreateContext();
+        var advisors = ctx.Advisors.AsNoTracking().Where(a => !a.IsExcluded);
+        var firms = ctx.Firms.AsNoTracking().Where(f => !f.IsExcluded);
+
+        int totalAdvisors = advisors.Count();
+        int totalFirms = firms.Count();
+        int favorites = advisors.Count(a => a.IsFavorited);
+        int inCrm = advisors.Count(a => a.IsImportedToCrm);
+        int withDisclosures = advisors.Count(a => a.HasDisclosures);
+        int favsNotInCrm = advisors.Count(a => a.IsFavorited && !a.IsImportedToCrm);
+
+        var today = DateTime.UtcNow.Date;
+        int updatedToday = advisors.Count(a => a.UpdatedAt >= today);
+
+        return (totalAdvisors, totalFirms, favorites, inCrm,
+                withDisclosures, favsNotInCrm, updatedToday);
+    }
+
+    public List<Firm> GetTopMaFirms(int limit = 10)
+    {
+        using var ctx = CreateContext();
+        return ctx.Firms.AsNoTracking()
+            .Where(f => !f.IsExcluded && f.RegulatoryAum != null && f.RegulatoryAum > 0)
+            .OrderByDescending(f => f.RegulatoryAum)
+            .Take(limit)
+            .ToList();
+    }
+
+    public List<Advisor> GetAdvisorsByFirmCrd(string firmCrd, int limit = 100)
+    {
+        using var ctx = CreateContext();
+        return ctx.Advisors.AsNoTracking()
+            .Where(a => !a.IsExcluded && a.CurrentFirmCrd == firmCrd)
+            .OrderBy(a => a.LastName).ThenBy(a => a.FirstName)
+            .Take(limit)
+            .ToList();
+    }
+
+    public Firm? GetFirmByCrd(string crd)
+    {
+        using var ctx = CreateContext();
+        return ctx.Firms.AsNoTracking()
+            .FirstOrDefault(f => f.CrdNumber == crd);
     }
 }

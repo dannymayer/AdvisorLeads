@@ -25,6 +25,7 @@ public partial class FilterPanel : UserControl
     private Button _btnApply = null!;
     private Button _btnClear = null!;
     private Label _lblBadge = null!;
+    private System.Windows.Forms.Timer _debounceTimer = null!;
 
     private bool _suppressAutoApply;
 
@@ -301,6 +302,13 @@ public partial class FilterPanel : UserControl
 
     private void WireAutoApply()
     {
+        _debounceTimer = new System.Windows.Forms.Timer { Interval = 350 };
+        _debounceTimer.Tick += (_, _) =>
+        {
+            _debounceTimer.Stop();
+            if (!_suppressAutoApply) FireFiltersChanged();
+        };
+
         foreach (var cbo in new[] { _cboState, _cboRecordType, _cboStatus, _cboSource, _cboDisclosures, _cboCrm })
             cbo.SelectedIndexChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
 
@@ -312,7 +320,16 @@ public partial class FilterPanel : UserControl
         _numMinDisclosures.ValueChanged += (_, _) => { if (!_suppressAutoApply) FireFiltersChanged(); };
 
         foreach (var txt in new[] { _txtName, _txtCrd, _txtCity, _txtFirm, _txtLicense })
-            txt.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) FireFiltersChanged(); };
+        {
+            txt.TextChanged += (_, _) =>
+            {
+                if (!_suppressAutoApply) { _debounceTimer.Stop(); _debounceTimer.Start(); }
+            };
+            txt.KeyDown += (_, e) =>
+            {
+                if (e.KeyCode == Keys.Enter) { _debounceTimer.Stop(); FireFiltersChanged(); }
+            };
+        }
     }
 
     private void FireFiltersChanged()
@@ -527,6 +544,13 @@ public partial class FilterPanel : UserControl
         ClearAllControls();
         _suppressAutoApply = false;
         FireFiltersChanged();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            _debounceTimer?.Dispose();
+        base.Dispose(disposing);
     }
 }
 

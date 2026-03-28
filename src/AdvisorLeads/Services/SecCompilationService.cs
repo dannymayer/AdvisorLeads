@@ -661,8 +661,52 @@ public class SecCompilationService
 
                     case "Item5A":
                         if (int.TryParse(reader.GetAttribute("TtlEmp"), out var emp) && emp > 0)
-                            firm.NumberOfAdvisors = emp;
+                            firm.NumberOfEmployees = emp;
                         break;
+
+                    case "Item5B":
+                        if (int.TryParse(reader.GetAttribute("TtlAdvsrs"), out var advs) && advs > 0)
+                            firm.NumberOfAdvisors = advs;
+                        else if (int.TryParse(reader.GetAttribute("IAReps"), out var iareps) && iareps > 0)
+                            firm.NumberOfAdvisors = iareps;
+                        break;
+
+                    case "Item5D":
+                        if (int.TryParse(reader.GetAttribute("TtlClnts"), out var clients) && clients > 0)
+                            firm.NumClients = clients;
+                        break;
+
+                    case "Item5F":
+                    {
+                        if (decimal.TryParse(reader.GetAttribute("RgltryAUM"),
+                                System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out var raum) && raum > 0)
+                            firm.RegulatoryAum = raum;
+                        if (decimal.TryParse(reader.GetAttribute("RgltryAUMNonDisc"),
+                                System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out var raumnd) && raumnd > 0)
+                            firm.RegulatoryAumNonDiscretionary = raumnd;
+                        var discAuth = reader.GetAttribute("HasDiscAuth");
+                        if (discAuth == "Y") firm.HasDiscretionaryAuthority = true;
+                        else if (discAuth == "N") firm.HasDiscretionaryAuthority = false;
+                        break;
+                    }
+
+                    case "Item9A":
+                    {
+                        var cust = reader.GetAttribute("HasCustody");
+                        if (cust == "Y") firm.HasCustody = true;
+                        else if (cust == "N") firm.HasCustody = false;
+                        break;
+                    }
+
+                    case "Filing":
+                    {
+                        var filingDt = reader.GetAttribute("Dt");
+                        if (!string.IsNullOrWhiteSpace(filingDt))
+                            firm.LatestFilingDate = filingDt;
+                        break;
+                    }
                 }
             }
 

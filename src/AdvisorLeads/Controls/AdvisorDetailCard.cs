@@ -9,6 +9,7 @@ public class AdvisorDetailCard : UserControl
     // Header section
     private Label _lblName = null!;
     private Label _lblCrd = null!;
+    private LinkLabel _lnkProfiles = null!;
     private Label _lblSourceBadge = null!;
     private Label _lblRecordTypeBadge = null!;
     private Label _lblStatusBadge = null!;
@@ -73,7 +74,7 @@ public class AdvisorDetailCard : UserControl
         {
             Dock = DockStyle.Fill,
             Padding = new Padding(0, 0, 0, 12),
-            Height = 90
+            Height = 104
         };
 
         _lblName = new Label
@@ -94,10 +95,27 @@ public class AdvisorDetailCard : UserControl
             ForeColor = Color.Gray
         };
 
+        _lnkProfiles = new LinkLabel
+        {
+            Text = "",
+            Font = new Font("Segoe UI", 8.5f),
+            AutoSize = true,
+            Location = new Point(0, 50),
+            Visible = false
+        };
+        _lnkProfiles.LinkClicked += (s, e) =>
+        {
+            if (e.Link?.LinkData is string url)
+            {
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+                catch { }
+            }
+        };
+
         var badgePanel = new FlowLayoutPanel
         {
             AutoSize = true,
-            Location = new Point(0, 54),
+            Location = new Point(0, 68),
             FlowDirection = FlowDirection.LeftToRight
         };
 
@@ -108,7 +126,7 @@ public class AdvisorDetailCard : UserControl
         _lblExcludedBadge = MakeBadge("EXCLUDED", Color.FromArgb(200, 60, 60));
 
         badgePanel.Controls.AddRange(new Control[] { _lblSourceBadge, _lblRecordTypeBadge, _lblStatusBadge, _lblCrmBadge, _lblExcludedBadge });
-        header.Controls.AddRange(new Control[] { _lblName, _lblCrd, badgePanel });
+        header.Controls.AddRange(new Control[] { _lblName, _lblCrd, _lnkProfiles, badgePanel });
         mainLayout.Controls.Add(header, 0, 0);
 
         // ── Info Grid ─────────────────────────────────────────────────
@@ -238,6 +256,8 @@ public class AdvisorDetailCard : UserControl
         _lblStatusBadge.Visible = false;
         _lblCrmBadge.Visible = false;
         _lblExcludedBadge.Visible = false;
+        _lnkProfiles.Visible = false;
+        _lnkProfiles.Links.Clear();
         _btnRefresh.Enabled = false;
         _btnImportCrm.Enabled = false;
         _btnAddToList.Enabled = false;
@@ -255,6 +275,38 @@ public class AdvisorDetailCard : UserControl
                      + (advisor.IapdNumber != null ? $"  |  IAPD: {advisor.IapdNumber}" : "")
                      + (advisor.OtherNames != null ? $"  |  Also known as: {advisor.OtherNames}" : "")
                      + $"  |  Updated: {advisor.UpdatedAt:yyyy-MM-dd}";
+
+        // Clickable profile links
+        _lnkProfiles.Links.Clear();
+        var linkParts = new List<string>();
+        if (!string.IsNullOrEmpty(advisor.CrdNumber))
+            linkParts.Add($"BrokerCheck|https://brokercheck.finra.org/individual/summary/{advisor.CrdNumber}");
+        if (!string.IsNullOrEmpty(advisor.IapdNumber))
+            linkParts.Add($"SEC IAPD|https://adviserinfo.sec.gov/individual/summary/{advisor.IapdNumber}");
+        if (linkParts.Count > 0)
+        {
+            var linkText = string.Join("   ", linkParts.Select(p => p.Split('|')[0]));
+            _lnkProfiles.Text = linkText;
+            int pos = 0;
+            foreach (var part in linkParts)
+            {
+                var segments = part.Split('|');
+                var label = segments[0];
+                var url = segments[1];
+                int idx = linkText.IndexOf(label, pos, StringComparison.Ordinal);
+                if (idx >= 0)
+                {
+                    _lnkProfiles.Links.Add(idx, label.Length, url);
+                    pos = idx + label.Length;
+                }
+            }
+            _lnkProfiles.Visible = true;
+        }
+        else
+        {
+            _lnkProfiles.Text = "";
+            _lnkProfiles.Visible = false;
+        }
 
         // Badges
         _lblSourceBadge.Text = advisor.Source ?? "";

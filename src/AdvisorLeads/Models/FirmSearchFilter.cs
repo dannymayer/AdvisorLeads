@@ -20,4 +20,6 @@ public class FirmSearchFilter
     public int? MinMaScore { get; set; }
     /// <summary>M&A score grade filter: "A", "B", "C", "D", "F".</summary>
     public string? MaScoreGrade { get; set; }
+    public int PageSize { get; set; } = 5000;
+    public int PageNumber { get; set; } = 1;
 }

@@ -13,6 +13,8 @@ public class FirmFilterPanel : UserControl
     private NumericUpDown _numMinAdvisors = null!;
     private CheckBox _chkBrokerProtocol = null!;
     private ComboBox _cboMinAum = null!;
+    private ComboBox _cboCompensation = null!;
+    private CheckBox _chkHasCustody = null!;
     private Button _btnApply = null!;
     private Button _btnClear = null!;
 
@@ -81,6 +83,23 @@ public class FirmFilterPanel : UserControl
         };
         flow.Controls.Add(_chkBrokerProtocol);
 
+        flow.Controls.Add(MakeLabel("Comp:"));
+        _cboCompensation = new ComboBox { Width = 100, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 2, 8, 0) };
+        _cboCompensation.Items.AddRange(new[] { "(All)", "Fee-Only", "Commission", "Both" });
+        _cboCompensation.SelectedIndex = 0;
+        flow.Controls.Add(_cboCompensation);
+
+        _chkHasCustody = new CheckBox
+        {
+            Text = "Has Custody",
+            AutoSize = false,
+            Width = 90,
+            Height = 24,
+            Margin = new Padding(4, 3, 8, 0),
+            Font = new Font("Segoe UI", 8.5f)
+        };
+        flow.Controls.Add(_chkHasCustody);
+
         _btnApply = new Button
         {
             Text = "Apply",
@@ -118,7 +137,9 @@ public class FirmFilterPanel : UserControl
         _cboStatus.SelectedIndexChanged += (_, _) => FiltersChanged?.Invoke(this, EventArgs.Empty);
         _txtName.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) FiltersChanged?.Invoke(this, EventArgs.Empty); };
         _cboMinAum.SelectedIndexChanged += (_, _) => FiltersChanged?.Invoke(this, EventArgs.Empty);
+        _cboCompensation.SelectedIndexChanged += (_, _) => FiltersChanged?.Invoke(this, EventArgs.Empty);
         _chkBrokerProtocol.CheckedChanged += (_, _) => FiltersChanged?.Invoke(this, EventArgs.Empty);
+        _chkHasCustody.CheckedChanged += (_, _) => FiltersChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private static Label MakeLabel(string text) => new Label
@@ -142,6 +163,8 @@ public class FirmFilterPanel : UserControl
             RegistrationStatus = _cboStatus.SelectedIndex <= 0 ? null : _cboStatus.SelectedItem?.ToString(),
             MinAdvisors = _numMinAdvisors.Value > 0 ? (int)_numMinAdvisors.Value : null,
             BrokerProtocolOnly = _chkBrokerProtocol.Checked,
+            HasCustody = _chkHasCustody.Checked ? true : null,
+            CompensationType = _cboCompensation.SelectedIndex <= 0 ? null : _cboCompensation.SelectedItem?.ToString(),
             MinRegulatoryAum = _cboMinAum.SelectedIndex switch
             {
                 1 => 1_000_000m,
@@ -172,7 +195,9 @@ public class FirmFilterPanel : UserControl
         _cboStatus.SelectedIndex = 0;
         _numMinAdvisors.Value = 0;
         _cboMinAum.SelectedIndex = 0;
+        _cboCompensation.SelectedIndex = 0;
         _chkBrokerProtocol.Checked = false;
+        _chkHasCustody.Checked = false;
         FiltersChanged?.Invoke(this, EventArgs.Empty);
     }
 }

@@ -317,6 +317,9 @@ public class FirmDetailPanel : UserControl
         if (firm.CompensationPerformanceBased == true) comp.Add("Performance");
         if (comp.Count > 0)
             AddRow("Compensation:", string.Join(", ", comp), "Custody:", firm.HasCustody == true ? "Yes" : "No");
+        else
+            AddRow("Discretion:", firm.HasDiscretionaryAuthority == true ? "Yes" : "—",
+                   "Custody:", firm.HasCustody == true ? "Yes" : "—");
 
         // Additional details
         if (firm.PrivateFundCount.HasValue)
@@ -324,7 +327,36 @@ public class FirmDetailPanel : UserControl
                    "Fund Assets:", firm.PrivateFundGrossAssets.HasValue ? FormatAumDisplay(firm.PrivateFundGrossAssets.Value) : "");
 
         if (firm.NumberOfOffices.HasValue)
-            AddRow("Offices:", firm.NumberOfOffices.Value.ToString("N0"), "", "");
+            AddRow("Offices:", firm.NumberOfOffices.Value.ToString("N0"),
+                   "Related AUM:", firm.TotalAumRelatedPersons.HasValue ? FormatAumDisplay(firm.TotalAumRelatedPersons.Value) : "—");
+
+        // Business flags
+        var flags = new List<string>();
+        if (firm.IsBrokerDealer == true) flags.Add("Broker-Dealer");
+        if (firm.IsInsuranceCompany == true) flags.Add("Insurance Co.");
+        if (flags.Count > 0)
+            AddRow("Also Registered:", string.Join(", ", flags), "", "");
+
+        // Advisory activities
+        if (!string.IsNullOrWhiteSpace(firm.AdvisoryActivities))
+            AddRow("Advisory:", firm.AdvisoryActivities, "", "");
+
+        // Client type breakdown
+        var clientTypes = new List<string>();
+        if (firm.ClientsIndividuals > 0) clientTypes.Add($"Individuals: {firm.ClientsIndividuals:N0}");
+        if (firm.ClientsHighNetWorth > 0) clientTypes.Add($"HNW: {firm.ClientsHighNetWorth:N0}");
+        if (firm.ClientsBankingInstitutions > 0) clientTypes.Add($"Banks: {firm.ClientsBankingInstitutions:N0}");
+        if (firm.ClientsInvestmentCompanies > 0) clientTypes.Add($"Inv. Co.: {firm.ClientsInvestmentCompanies:N0}");
+        if (firm.ClientsPensionPlans > 0) clientTypes.Add($"Pension: {firm.ClientsPensionPlans:N0}");
+        if (firm.ClientsCharitable > 0) clientTypes.Add($"Charitable: {firm.ClientsCharitable:N0}");
+        if (firm.ClientsGovernment > 0) clientTypes.Add($"Gov't: {firm.ClientsGovernment:N0}");
+        if (firm.ClientsOther > 0) clientTypes.Add($"Other: {firm.ClientsOther:N0}");
+        if (clientTypes.Count > 0)
+        {
+            var half = (clientTypes.Count + 1) / 2;
+            AddRow("Client Mix:", string.Join(", ", clientTypes.Take(half)),
+                   "", string.Join(", ", clientTypes.Skip(half)));
+        }
 
         _infoGrid.RowCount = rows.Count;
         foreach (var (r, i) in rows.Select((r, i) => (r, i)))
