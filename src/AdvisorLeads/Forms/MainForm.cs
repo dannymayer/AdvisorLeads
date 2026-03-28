@@ -20,6 +20,7 @@ public class MainForm : Form
     private DataSyncService _sync = null!;
     private BackgroundDataService _bgData = null!;
     private WealthboxService? _wealthbox;
+    private HunterService? _hunterService;
     private SecIapdEnrichmentService _iapd = null!;
     private ListRepository _listRepo = null!;
     private AumAnalyticsService _aumAnalytics = null!;
@@ -49,6 +50,8 @@ public class MainForm : Form
     private ToolStripStatusLabel _lblSync = null!;
     private MenuStrip _menuStrip = null!;
     private DashboardPanel _dashboardPanel = null!;
+    private ReportingService _reportingService = null!;
+    private ReportsPanel _reportsPanel = null!;
 
     // State
     private List<Advisor> _currentAdvisors = new();
@@ -120,10 +123,16 @@ public class MainForm : Form
         _bgData.SetSecBulkSubmissionsService(secBulkSubmissions);
 
         _dataCleaning = new DataCleaningService(dbPath);
+        _reportingService = new ReportingService(_dbPath);
         // Load saved Wealthbox token
         _wealthboxToken = LoadSetting("WealthboxToken") ?? string.Empty;
         if (!string.IsNullOrEmpty(_wealthboxToken))
             _wealthbox = new WealthboxService(_wealthboxToken);
+
+        // Load saved Hunter.io API key
+        var hunterKey = LoadSetting("HunterApiKey");
+        if (!string.IsNullOrEmpty(hunterKey))
+            _hunterService = new HunterService(hunterKey);
 
         // Load last sync time
         var syncStr = LoadSetting("LastSyncTime");
@@ -185,6 +194,7 @@ public class MainForm : Form
         _detailCard.AddToListRequested += (_, advisor) => OnAddToList(advisor);
         _detailCard.FavoriteRequested += OnFavoriteRequested;
         _detailCard.FirmNavigationRequested += OnFirmNavigationRequested;
+        _detailCard.FindEmailRequested += OnFindEmailRequested;
         _contentSplit.Panel2.Controls.Add(_detailCard);
 
         // Content split for firms: list | detail
@@ -214,6 +224,8 @@ public class MainForm : Form
         _dashboardPanel = new DashboardPanel(_repo) { Dock = DockStyle.Fill };
         _dashboardPanel.RefreshDataRequested += OnFetchData;
         _dashboardPanel.DataQualityCheckRequested += OnDataQualityCheck;
+        _dashboardPanel.BrowseAdvisorsRequested += (_, _) => _mainTabs.SelectedIndex = 1;
+        _dashboardPanel.BrowseFirmsRequested += (_, _) => _mainTabs.SelectedIndex = 2;
         _dashboardPanel.UpdateLastSync(_lastSyncTime?.ToLocalTime());
         var tabDashboard = new TabPage("Dashboard") { Padding = new Padding(0) };
         tabDashboard.Controls.Add(_dashboardPanel);
@@ -225,9 +237,13 @@ public class MainForm : Form
         _mainTabs.TabPages.Add(tabDashboard);
         _mainTabs.TabPages.Add(tabIndividuals);
         _mainTabs.TabPages.Add(tabFirms);
+        _reportsPanel = new ReportsPanel(_reportingService) { Dock = DockStyle.Fill };
+        var tabReports = new TabPage("Reports") { Padding = new Padding(0) };
+        tabReports.Controls.Add(_reportsPanel);
+        _mainTabs.TabPages.Add(tabReports);
         _mainTabs.SelectedIndexChanged += (_, _) =>
         {
-            _mainSplit.Panel1Collapsed = _mainTabs.SelectedIndex == 0;
+            _mainSplit.Panel1Collapsed = _mainTabs.SelectedIndex == 0 || _mainTabs.SelectedIndex == 2 || _mainTabs.SelectedIndex == 3;
             if (_mainTabs.SelectedIndex == 1)
                 LoadAdvisors();
             else if (_mainTabs.SelectedIndex == 2)
@@ -241,13 +257,13 @@ public class MainForm : Form
 
     private void ApplyInitialSplitLayout()
     {
-        _mainSplit.Panel1MinSize = 180;
+        _mainSplit.Panel1MinSize = 220;
         _mainSplit.Panel2MinSize = 400;
         _contentSplit.Panel1MinSize = 280;
         _firmContentSplit.Panel1MinSize = 280;
 
         // Use proportional distances based on actual form width
-        int mainDist = Math.Max(180, (int)(this.ClientSize.Width * 0.18));
+        int mainDist = Math.Max(220, (int)(this.ClientSize.Width * 0.18));
         int contentDist = Math.Max(280, (int)(_mainSplit.Panel2.Width * 0.45));
 
         SetSafeSplitterDistance(_mainSplit, mainDist);
@@ -339,6 +355,9 @@ public class MainForm : Form
             ToolTipText = "Scan for and fix data quality issues: duplicates, normalization, orphaned records"
         };
         toolsMenu.DropDownItems.Add(dataQualityItem);
+        toolsMenu.DropDownItems.Add(new ToolStripSeparator());
+        toolsMenu.DropDownItems.Add(new ToolStripMenuItem("Hunter.io &Settings...", null, OnHunterSettings));
+        toolsMenu.DropDownItems.Add(new ToolStripMenuItem("&Find Emails (Hunter.io)...", null, OnHunterBatchEnrich));
         _menuStrip.Items.Insert(_menuStrip.Items.IndexOf(helpMenu), toolsMenu);
 
         this.Controls.Add(_menuStrip);
@@ -462,6 +481,7 @@ public class MainForm : Form
         _firmListView.Columns.Add("Status", 90);
         _firmListView.Columns.Add("Source", 55);
         _firmListView.Columns.Add("Updated", 90);
+        _firmListView.Columns.Add("BP", 35);
 
         _firmListView.SelectedIndexChanged += OnFirmListViewSelectionChanged;
     }
@@ -491,6 +511,7 @@ public class MainForm : Form
                 item.SubItems.Add(firm.RegistrationStatus ?? "");
                 item.SubItems.Add(firm.Source ?? "");
                 item.SubItems.Add(firm.UpdatedAt.ToString("yyyy-MM-dd"));
+                item.SubItems.Add(firm.BrokerProtocolMember ? "✓" : "");
                 item.Tag = firm.Id;
                 _firmListView.Items.Add(item);
             }
@@ -831,7 +852,7 @@ public class MainForm : Form
                     args.IncludeFinra, args.IncludeSec,
                     progress);
 
-                dlg.FetchComplete(results.Count);
+                dlg.FetchComplete(results.NewCount, results.UpdatedCount);
                 LoadAdvisors();
                 LoadFilterOptions();
             }
@@ -1026,6 +1047,144 @@ public class MainForm : Form
                 ? null
                 : new WealthboxService(_wealthboxToken);
             SetStatus("Wealthbox settings saved.");
+        }
+    }
+
+    private void OnHunterSettings(object? sender, EventArgs e)
+    {
+        var currentKey = LoadSetting("HunterApiKey") ?? string.Empty;
+        using var dlg = new HunterSettingsDialog(currentKey);
+        if (dlg.ShowDialog(this) == DialogResult.OK)
+        {
+            var key = dlg.ApiKey;
+            SaveSetting("HunterApiKey", key);
+            _hunterService = string.IsNullOrEmpty(key) ? null : new HunterService(key);
+            SetStatus("Hunter.io settings saved.");
+        }
+    }
+
+    private async void OnHunterBatchEnrich(object? sender, EventArgs e)
+    {
+        if (_hunterService == null)
+        {
+            MessageBox.Show(
+                "Hunter.io API key is not configured.\nGo to Tools > Hunter.io Settings... to add your key.",
+                "Hunter.io Not Configured", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        SetStatus("Loading advisors for email enrichment...");
+
+        var advisors = _repo.GetAdvisors(new SearchFilter { PageSize = 5000 });
+        var toEnrich = advisors
+            .Where(a => string.IsNullOrEmpty(a.Email) && !string.IsNullOrEmpty(a.CurrentFirmCrd))
+            .ToList();
+
+        if (toEnrich.Count == 0)
+        {
+            SetStatus("No advisors missing emails with known firm domains.");
+            return;
+        }
+
+        var result = MessageBox.Show(
+            $"Find emails for {toEnrich.Count} advisor(s) missing email addresses?\nThis may take a few minutes.",
+            "Find Emails (Hunter.io)", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (result != DialogResult.Yes)
+        {
+            SetStatus("Email enrichment cancelled.");
+            return;
+        }
+
+        SetStatus($"Finding emails for {toEnrich.Count} advisors...");
+
+        try
+        {
+            // Cache firm domains to avoid repeated DB lookups for the same firm
+            var firmDomainCache = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            var emailResults = new List<(int AdvisorId, string Email)>();
+            int processed = 0;
+
+            foreach (var advisor in toEnrich)
+            {
+                if (!firmDomainCache.TryGetValue(advisor.CurrentFirmCrd!, out var domain))
+                {
+                    var firm = _repo.GetFirmByCrd(advisor.CurrentFirmCrd!);
+                    domain = firm?.Website is not null
+                        ? HunterService.ExtractDomain(firm.Website)
+                        : null;
+                    firmDomainCache[advisor.CurrentFirmCrd!] = domain;
+                }
+
+                if (string.IsNullOrEmpty(domain)) continue;
+
+                processed++;
+                SetStatus($"Finding email {processed}/{toEnrich.Count}: {advisor.FullName}...");
+
+                var found = await _hunterService.FindEmailAsync(advisor.FirstName, advisor.LastName, domain);
+                if (found != null)
+                    emailResults.Add((advisor.Id, found.Email));
+            }
+
+            if (emailResults.Count > 0)
+                _repo.UpdateAdvisorEmails(emailResults);
+
+            LoadAdvisors();
+            SetStatus($"Email enrichment complete: {emailResults.Count} email(s) found out of {toEnrich.Count} advisors checked.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Email enrichment error: {ex.Message}");
+        }
+    }
+
+    private async void OnFindEmailRequested(object? sender, Advisor advisor)
+    {
+        if (_hunterService == null)
+        {
+            SetStatus("Hunter.io not configured. Go to Tools > Hunter.io Settings...");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(advisor.CurrentFirmCrd))
+        {
+            SetStatus($"No firm CRD for {advisor.FullName}; cannot look up domain.");
+            return;
+        }
+
+        var firm = _repo.GetFirmByCrd(advisor.CurrentFirmCrd);
+        if (firm?.Website is null)
+        {
+            SetStatus($"No website found for {advisor.CurrentFirmName ?? advisor.CurrentFirmCrd}.");
+            return;
+        }
+
+        var domain = HunterService.ExtractDomain(firm.Website);
+        SetStatus($"Finding email for {advisor.FullName} at {domain}...");
+
+        try
+        {
+            var result = await _hunterService.FindEmailAsync(advisor.FirstName, advisor.LastName, domain);
+            if (result != null)
+            {
+                _repo.UpdateAdvisorEmails(new[] { (advisor.Id, result.Email) });
+                SetStatus($"Found email for {advisor.FullName}: {result.Email} (confidence: {result.Score}%)");
+
+                // Refresh the detail card if this advisor is still selected
+                var refreshed = _repo.GetAdvisorById(advisor.Id);
+                if (refreshed != null && _selectedAdvisor?.Id == advisor.Id)
+                {
+                    _selectedAdvisor = refreshed;
+                    _detailCard.ShowAdvisor(refreshed);
+                }
+            }
+            else
+            {
+                SetStatus($"No reliable email found for {advisor.FullName} at {domain}.");
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Error finding email: {ex.Message}");
         }
     }
 
