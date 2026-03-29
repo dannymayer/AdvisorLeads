@@ -570,6 +570,14 @@ public partial class FilterPanel : UserControl
         FireFiltersChanged();
     }
 
+    public void Clear() => OnClear(this, EventArgs.Empty);
+
+    public void SetCrdOverride(string? crd)
+    {
+        _txtCrd.Text = crd ?? string.Empty;
+        FireFiltersChanged();
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)

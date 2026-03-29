@@ -30,6 +30,7 @@ public class MainForm : Form
     private EdgarSearchService _edgarSearch = null!;
     private MaTargetScoringService _maScoring = null!;
     private DataCleaningService _dataCleaning = null!;
+    private AlertRepository _alertRepo = null!;
     private string _dbPath = null!;
     private string _wealthboxToken = string.Empty;
 
@@ -52,6 +53,15 @@ public class MainForm : Form
     private DashboardPanel _dashboardPanel = null!;
     private ReportingService _reportingService = null!;
     private ReportsPanel _reportsPanel = null!;
+    private AlertsPanel _alertsPanel = null!;
+    private TabPage _tabAlerts = null!;
+    private Label _alertsBadgeLabel = null!;
+    private AnalyticsPanel? _analyticsPanel;
+    private GeographicAggregationService? _geoService;
+    private CompetitiveIntelligenceService? _competitiveService;
+    private TeamLiftDetectionService? _teamLiftService;
+    private MobilityScoreService? _mobilityScoreService;
+    private DisclosureScoringService? _disclosureScoringService;
 
     // State
     private List<Advisor> _currentAdvisors = new();
@@ -59,6 +69,7 @@ public class MainForm : Form
     private List<Firm> _currentFirms = new();
     private Firm? _selectedFirm;
     private int _totalAdvisorCount = 0;
+    private int _mainSplitSavedDistance = MainSplitDefaultDistance;
     private DateTime? _lastSyncTime;
     private string? _pendingFirmCrd;
     // Tracks CRDs for which on-demand disclosure enrichment has already been triggered
@@ -66,6 +77,7 @@ public class MainForm : Form
     private readonly HashSet<string> _enrichmentTriggered =
         new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _searchCts;
+    private System.Windows.Forms.Timer? _dashboardRefreshTimer;
 
     public MainForm()
     {
@@ -90,12 +102,14 @@ public class MainForm : Form
             initDb.InitializeDatabase();
         }
         _repo = new AdvisorRepository(dbPath);
+        _alertRepo = new AlertRepository(dbPath);
         _finra = new FinraService();
         _secStub = new SecIapdService();
         _sec = new SecCompilationService();
         _sync = new DataSyncService(_finra, _secStub, _repo);
         _bgData = new BackgroundDataService(_finra, _sec, _repo);
         _bgData.DataUpdated += OnBackgroundDataUpdated;
+        _bgData.AlertsGenerated += OnAlertsGenerated;
         _secMonthly = new SecMonthlyFirmService();
         _bgData.SetSecMonthlyService(_secMonthly);
         _brokerProtocolService = new BrokerProtocolService();
@@ -138,6 +152,26 @@ public class MainForm : Form
         var syncStr = LoadSetting("LastSyncTime");
         if (DateTime.TryParse(syncStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var syncTime))
             _lastSyncTime = syncTime;
+
+        // Analytics & Intelligence services
+        _disclosureScoringService = new DisclosureScoringService(_repo);
+        _mobilityScoreService     = new MobilityScoreService(_repo, _disclosureScoringService);
+        _geoService               = new GeographicAggregationService(_repo);
+        _competitiveService       = new CompetitiveIntelligenceService(_repo);
+        _teamLiftService          = new TeamLiftDetectionService(_dbPath);
+        _bgData.SetDisclosureScoringService(_disclosureScoringService);
+        _bgData.SetMobilityScoreService(_mobilityScoreService);
+        _bgData.SetCompetitiveIntelligenceService(_competitiveService);
+
+        // Cat1 enrichment services
+        var finraSanction = new FinraSanctionService(_finra, _repo);
+        _bgData.SetFinraSanctionService(finraSanction);
+        var secEnforcement = new SecEnforcementService(_repo);
+        _bgData.SetSecEnforcementService(secEnforcement);
+        var courtListener = new CourtListenerService(_repo);
+        _bgData.SetCourtListenerService(courtListener);
+        var formAdvDeep = new FormAdvDeepEnrichmentService(_repo);
+        _bgData.SetFormAdvDeepEnrichmentService(formAdvDeep);
     }
 
     private void BuildUI()
@@ -195,6 +229,7 @@ public class MainForm : Form
         _detailCard.FavoriteRequested += OnFavoriteRequested;
         _detailCard.FirmNavigationRequested += OnFirmNavigationRequested;
         _detailCard.FindEmailRequested += OnFindEmailRequested;
+        _detailCard.WatchToggleRequested += OnWatchToggleRequested;
         _contentSplit.Panel2.Controls.Add(_detailCard);
 
         // Content split for firms: list | detail
@@ -216,6 +251,7 @@ public class MainForm : Form
         _firmDetailPanel = new FirmDetailPanel { Dock = DockStyle.Fill };
         _firmDetailPanel.SetServices(_aumAnalytics, _changeDetection, _formAdvHistorical, _edgarSubmissions, _edgarSearch, _maScoring);
         _firmDetailPanel.AdvisorNavigationRequested += OnAdvisorNavigationRequested;
+        _firmDetailPanel.WatchFirmToggleRequested += OnWatchFirmToggleRequested;
         _firmContentSplit.Panel2.Controls.Add(_firmDetailPanel);
 
         // Tab control — Dashboard (0), Individuals (1), Firms (2)
@@ -241,16 +277,77 @@ public class MainForm : Form
         var tabReports = new TabPage("Reports") { Padding = new Padding(0) };
         tabReports.Controls.Add(_reportsPanel);
         _mainTabs.TabPages.Add(tabReports);
+
+        // Alerts tab (index 5)
+        _alertsPanel = new AlertsPanel(
+            _alertRepo, LoadSetting, SaveSetting,
+            crd => _repo.GetFirmByCrd(crd)?.Name)
+        { Dock = DockStyle.Fill };
+        _alertsPanel.OpenAdvisorRequested += (_, alert) =>
+        {
+            _filterPanel.SetCrdOverride(alert.EntityCrd);
+            _mainTabs.SelectedIndex = 1;
+        };
+        _alertsPanel.OpenFirmRequested += (_, alert) =>
+        {
+            _pendingFirmCrd = alert.EntityCrd;
+            _firmFilterPanel.Clear();
+            _mainTabs.SelectedIndex = 2;
+        };
+        _tabAlerts = new TabPage("Alerts") { Padding = new Padding(0) };
+        _tabAlerts.Controls.Add(_alertsPanel);
+
+        // Analytics tab (index 4) — inserted before Alerts
+        var tabAnalytics = new TabPage("Analytics") { Padding = new Padding(0) };
+        _analyticsPanel = new AnalyticsPanel(
+            _repo, _geoService!, _competitiveService!, _teamLiftService!, _mobilityScoreService!);
+        _analyticsPanel.Dock = DockStyle.Fill;
+        tabAnalytics.Controls.Add(_analyticsPanel);
+        _mainTabs.TabPages.Add(tabAnalytics);
+
+        _mainTabs.TabPages.Add(_tabAlerts);
+
         _mainTabs.SelectedIndexChanged += (_, _) =>
         {
-            _mainSplit.Panel1Collapsed = _mainTabs.SelectedIndex == 0 || _mainTabs.SelectedIndex == 2 || _mainTabs.SelectedIndex == 3;
+            bool shouldCollapse = _mainTabs.SelectedIndex != 1;
+            if (shouldCollapse && !_mainSplit.Panel1Collapsed)
+            {
+                if (_mainSplit.SplitterDistance > 0)
+                    _mainSplitSavedDistance = _mainSplit.SplitterDistance;
+                _mainSplit.Panel1Collapsed = true;
+            }
+            else if (!shouldCollapse && _mainSplit.Panel1Collapsed)
+            {
+                _mainSplit.Panel1Collapsed = false;
+                SetSafeSplitterDistance(_mainSplit, _mainSplitSavedDistance);
+            }
             if (_mainTabs.SelectedIndex == 1)
                 LoadAdvisors();
             else if (_mainTabs.SelectedIndex == 2)
                 LoadFirms();
+            else if (_mainTabs.SelectedIndex == 4)
+                _analyticsPanel?.LoadDefaultView();
+            else if (_mainTabs.SelectedIndex == 5)
+                _alertsPanel.RefreshAlerts();
         };
 
+        // Badge label overlaid on the Alerts tab header
+        _alertsBadgeLabel = new Label
+        {
+            AutoSize = false,
+            Size = new Size(20, 14),
+            BackColor = Color.Red,
+            ForeColor = Color.White,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 7, FontStyle.Bold),
+            Visible = false
+        };
+        _mainTabs.SizeChanged += (_, _) => PositionAlertsBadge();
+
         _mainSplit.Panel2.Controls.Add(_mainTabs);
+        // Badge label overlays Panel2 on top of the tab headers.
+        _mainSplit.Panel2.Controls.Add(_alertsBadgeLabel);
+        _alertsBadgeLabel.BringToFront();
         this.Controls.Add(_mainSplit);
         this.Load += (_, _) => ApplyInitialSplitLayout();
     }
@@ -269,6 +366,11 @@ public class MainForm : Form
         SetSafeSplitterDistance(_mainSplit, mainDist);
         SetSafeSplitterDistance(_contentSplit, contentDist);
         SetSafeSplitterDistance(_firmContentSplit, contentDist);
+
+        // Save the distance, then collapse Panel1 — the app starts on Dashboard (tab 0).
+        _mainSplitSavedDistance = _mainSplit.SplitterDistance > 0 ? _mainSplit.SplitterDistance : mainDist;
+        _mainSplit.Panel1Collapsed = true;
+        PositionAlertsBadge();
     }
 
     private static void SetSafeSplitterDistance(SplitContainer splitContainer, int preferredDistance)
@@ -358,6 +460,14 @@ public class MainForm : Form
         toolsMenu.DropDownItems.Add(new ToolStripSeparator());
         toolsMenu.DropDownItems.Add(new ToolStripMenuItem("Hunter.io &Settings...", null, OnHunterSettings));
         toolsMenu.DropDownItems.Add(new ToolStripMenuItem("&Find Emails (Hunter.io)...", null, OnHunterBatchEnrich));
+        toolsMenu.DropDownItems.Add(new ToolStripSeparator());
+        var exportAdvisorsItem = new ToolStripMenuItem("&Export Advisors...", null, (_, _) => OnExportAdvisors())
+        {
+            ShortcutKeys = Keys.Control | Keys.Shift | Keys.E
+        };
+        var exportFirmsItem = new ToolStripMenuItem("Export &Firms...", null, (_, _) => OnExportFirms());
+        toolsMenu.DropDownItems.Add(exportAdvisorsItem);
+        toolsMenu.DropDownItems.Add(exportFirmsItem);
         _menuStrip.Items.Insert(_menuStrip.Items.IndexOf(helpMenu), toolsMenu);
 
         this.Controls.Add(_menuStrip);
@@ -446,6 +556,8 @@ public class MainForm : Form
         contextMenu.Items.Add("-");
         contextMenu.Items.Add("Import to Wealthbox", null, (_, _) => { if (_selectedAdvisor != null) OnImportCrmRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("-");
+        contextMenu.Items.Add("Export to Excel/CSV...", null, (_, _) => OnExportAdvisors());
+        contextMenu.Items.Add("-");
         contextMenu.Items.Add("Exclude from Results", null, (_, _) => { if (_selectedAdvisor != null) OnExcludeRequested(this, _selectedAdvisor); });
         contextMenu.Items.Add("Restore to Results", null, (_, _) => { if (_selectedAdvisor != null) OnRestoreRequested(this, _selectedAdvisor); });
         return contextMenu;
@@ -484,6 +596,10 @@ public class MainForm : Form
         _firmListView.Columns.Add("BP", 35);
 
         _firmListView.SelectedIndexChanged += OnFirmListViewSelectionChanged;
+
+        var firmCtx = new ContextMenuStrip();
+        firmCtx.Items.Add("Export to Excel/CSV...", null, (_, _) => OnExportFirms());
+        _firmListView.ContextMenuStrip = firmCtx;
     }
 
     private async void LoadFirms()
@@ -644,12 +760,23 @@ public class MainForm : Form
             dlg.ShowDialog(this);
 
             LoadAdvisors();
+            LoadFirms();
             LoadFilterOptions();
+            _ = _dashboardPanel.LoadStatsAsync();
         }
 
         _bgData.StartBackgroundRefresh(intervalMinutes: 60);
 
-        // Run FINRA detail enrichment for advisors that have the HasDisclosures flag set
+        // Refresh dashboard stats every 5 minutes while the app is open.
+        _dashboardRefreshTimer = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
+        _dashboardRefreshTimer.Tick += async (_, _) =>
+        {
+            if (_mainTabs.SelectedIndex == 0)
+                await _dashboardPanel.LoadStatsAsync();
+        };
+        _dashboardRefreshTimer.Start();
+
+        // Run FINRA detail enrichmentfor advisors that have the HasDisclosures flag set
         // but no actual Disclosure records in the database yet (the most critical gap).
         // Also covers advisors missing qualifications that were skipped by bulk-fetch parsing.
         _ = Task.Run(async () =>
@@ -1229,8 +1356,20 @@ public class MainForm : Form
         setupDlg.WorkFactory = (progress, token) => _bgData.PopulateInitialDataAsync(progress, token);
         setupDlg.ShowDialog(this);
 
+        // Reset filter state so the freshly populated data is not viewed through stale filters.
+        _filterPanel.Clear();
+        _firmFilterPanel.Clear();
+
+        // Full UI refresh — mirror what OnBackgroundDataUpdated does.
         LoadAdvisors();
+        LoadFirms();
         LoadFilterOptions();
+        _lastSyncTime = DateTime.UtcNow;
+        SaveSetting("LastSyncTime", _lastSyncTime.Value.ToString("O"));
+        UpdateSyncLabel();
+        _dashboardPanel.UpdateLastSync(_lastSyncTime.Value.ToLocalTime());
+        _ = _dashboardPanel.LoadStatsAsync();
+        _alertsPanel?.RefreshAlerts();
 
         _bgData.StartBackgroundRefresh(intervalMinutes: 60);
         SetStatus("Setup complete.");
@@ -1347,9 +1486,173 @@ public class MainForm : Form
         catch { return null; }
     }
 
+    private void OnExportAdvisors()
+    {
+        var advisors = _currentAdvisors;
+        var allKeys = AdvisorExportColumns.All.Select(c => c.Key).ToList();
+        var allHeaders = AdvisorExportColumns.All.Select(c => c.Header).ToList();
+        var defaultKeys = AdvisorExportColumns.GetPreset("Default").Select(c => c.Key).ToList();
+
+        using var dlg = new ExportDialog(
+            title: "Export Advisors",
+            allColumnKeys: allKeys,
+            allColumnHeaders: allHeaders,
+            selectedKeys: defaultKeys,
+            presetNames: AdvisorExportColumns.PresetNames,
+            loadSetting: LoadSetting,
+            saveSetting: SaveSetting,
+            totalRecords: advisors.Count,
+            selectedCount: _advisorListView.SelectedIndices.Count,
+            entityType: "Advisor");
+
+        // Wire preset selector to return live column lists for built-in presets
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        var selectedColumns = AdvisorExportColumns.All
+            .Where(c => dlg.SelectedKeys.Contains(c.Key))
+            .OrderBy(c => dlg.SelectedKeys.IndexOf(c.Key))
+            .ToList();
+
+        var records = dlg.ExportAllRecords
+            ? advisors
+            : _advisorListView.SelectedIndices.Cast<int>()
+                .Where(i => i >= 0 && i < advisors.Count)
+                .Select(i => advisors[i])
+                .ToList();
+
+        try
+        {
+            if (dlg.OutputFormat == "Excel")
+            {
+                ExportService.ExportToExcel(
+                    records, selectedColumns, dlg.ChosenFilePath,
+                    sheetName: "Advisors",
+                    applyConditionalFormatting: dlg.ApplyConditionalFormatting,
+                    rowStyleSelector: ExportService.GetAdvisorRowStyle);
+            }
+            else
+            {
+                ExportService.ExportToCsv(records, selectedColumns, dlg.ChosenFilePath);
+            }
+            SetStatus($"Exported {records.Count} advisor(s) to {Path.GetFileName(dlg.ChosenFilePath)}");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dlg.ChosenFilePath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Export failed: {ex.Message}", "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void OnExportFirms()
+    {
+        var firms = _currentFirms;
+        var allKeys = FirmExportColumns.All.Select(c => c.Key).ToList();
+        var allHeaders = FirmExportColumns.All.Select(c => c.Header).ToList();
+        var defaultKeys = FirmExportColumns.GetPreset("Default").Select(c => c.Key).ToList();
+
+        using var dlg = new ExportDialog(
+            title: "Export Firms",
+            allColumnKeys: allKeys,
+            allColumnHeaders: allHeaders,
+            selectedKeys: defaultKeys,
+            presetNames: FirmExportColumns.PresetNames,
+            loadSetting: LoadSetting,
+            saveSetting: SaveSetting,
+            totalRecords: firms.Count,
+            selectedCount: _firmListView.SelectedItems.Count,
+            entityType: "Firm");
+
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        var selectedColumns = FirmExportColumns.All
+            .Where(c => dlg.SelectedKeys.Contains(c.Key))
+            .OrderBy(c => dlg.SelectedKeys.IndexOf(c.Key))
+            .ToList();
+
+        var records = dlg.ExportAllRecords
+            ? firms
+            : _firmListView.SelectedItems.Cast<ListViewItem>()
+                .Where(i => i.Tag is int id)
+                .Select(i => firms.FirstOrDefault(f => f.Id == (int)i.Tag!))
+                .Where(f => f != null).Cast<Firm>()
+                .ToList();
+
+        try
+        {
+            if (dlg.OutputFormat == "Excel")
+            {
+                ExportService.ExportToExcel(
+                    records, selectedColumns, dlg.ChosenFilePath,
+                    sheetName: "Firms",
+                    applyConditionalFormatting: dlg.ApplyConditionalFormatting,
+                    rowStyleSelector: ExportService.GetFirmRowStyle);
+            }
+            else
+            {
+                ExportService.ExportToCsv(records, selectedColumns, dlg.ChosenFilePath);
+            }
+            SetStatus($"Exported {records.Count} firm(s) to {Path.GetFileName(dlg.ChosenFilePath)}");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dlg.ChosenFilePath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Export failed: {ex.Message}", "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _dashboardRefreshTimer?.Stop();
+        _dashboardRefreshTimer?.Dispose();
         _bgData?.StopBackgroundRefresh();
         base.OnFormClosed(e);
+    }
+
+    private void OnAlertsGenerated(int alertCount)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(() => OnAlertsGenerated(alertCount)));
+            return;
+        }
+        _alertsPanel?.RefreshAlerts();
+        UpdateAlertsBadge();
+    }
+
+    private void OnWatchToggleRequested(object? sender, Advisor advisor)
+    {
+        _repo.SetAdvisorWatched(advisor.Id, advisor.IsWatched);
+    }
+
+    private void OnWatchFirmToggleRequested(object? sender, Firm firm)
+    {
+        _repo.SetFirmWatched(firm.Id, firm.IsWatched);
+    }
+
+    private void PositionAlertsBadge()
+    {
+        if (_alertsBadgeLabel == null || !_mainTabs.IsHandleCreated) return;
+        try
+        {
+            int alertsIdx = _mainTabs.TabPages.IndexOf(_tabAlerts);
+            if (alertsIdx >= 0)
+            {
+                var tabRect = _mainTabs.GetTabRect(alertsIdx);
+                // Position relative to Panel2, which hosts both _mainTabs and the badge label.
+                _alertsBadgeLabel.Location = new Point(
+                    _mainTabs.Left + tabRect.Right - _alertsBadgeLabel.Width - 1,
+                    _mainTabs.Top + tabRect.Top + 1);
+            }
+        }
+        catch { }
+        UpdateAlertsBadge();
+    }
+
+    private void UpdateAlertsBadge()
+    {
+        if (_alertsPanel == null || _alertsBadgeLabel == null) return;
+        int count = _alertsPanel.UnreadCount;
+        _alertsBadgeLabel.Visible = count > 0;
+        _alertsBadgeLabel.Text = count >= 99 ? "99+" : count.ToString();
     }
 }

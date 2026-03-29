@@ -24,11 +24,22 @@ public class BackgroundDataService
     private EdgarSearchService? _edgarSearch;
     private FormAdvHistoricalService? _formAdvHistorical;
     private SecBulkSubmissionsService? _secBulkSubmissions;
+    private WatchListMonitorService? _watchListMonitor;
+    private AumThresholdAlertService? _aumThresholdAlerts;
+    private BrokerProtocolAlertService? _brokerProtocolAlerts;
+    private MarketWatchService? _marketWatch;
+    private FinraSanctionService? _finraSanction;
+    private SecEnforcementService? _secEnforcement;
+    private CourtListenerService? _courtListener;
+    private FormAdvDeepEnrichmentService? _formAdvDeep;
     private CancellationTokenSource? _cts;
     private Task? _refreshTask;
 
     /// <summary>Raised on the UI thread whenever new data has been persisted.</summary>
     public event Action? DataUpdated;
+
+    /// <summary>Raised when new alerts are generated during a refresh cycle. Carries the count of new alerts.</summary>
+    public event Action<int>? AlertsGenerated;
 
     public BackgroundDataService(FinraService finra, SecCompilationService sec, AdvisorRepository repo)
     {
@@ -47,6 +58,22 @@ public class BackgroundDataService
     public void SetEdgarSearchService(EdgarSearchService s) => _edgarSearch = s;
     public void SetFormAdvHistoricalService(FormAdvHistoricalService s) => _formAdvHistorical = s;
     public void SetSecBulkSubmissionsService(SecBulkSubmissionsService s) => _secBulkSubmissions = s;
+    public void SetWatchListMonitorService(WatchListMonitorService s) => _watchListMonitor = s;
+    public void SetAumThresholdAlertService(AumThresholdAlertService s) => _aumThresholdAlerts = s;
+    public void SetBrokerProtocolAlertService(BrokerProtocolAlertService s) => _brokerProtocolAlerts = s;
+    public void SetMarketWatchService(MarketWatchService s) => _marketWatch = s;
+
+    private DisclosureScoringService? _disclosureScorer;
+    private MobilityScoreService? _mobilityScorer;
+    private CompetitiveIntelligenceService? _competitiveIntel;
+
+    public void SetDisclosureScoringService(DisclosureScoringService s) => _disclosureScorer = s;
+    public void SetMobilityScoreService(MobilityScoreService s) => _mobilityScorer = s;
+    public void SetCompetitiveIntelligenceService(CompetitiveIntelligenceService s) => _competitiveIntel = s;
+    public void SetFinraSanctionService(FinraSanctionService s) => _finraSanction = s;
+    public void SetSecEnforcementService(SecEnforcementService s) => _secEnforcement = s;
+    public void SetCourtListenerService(CourtListenerService s) => _courtListener = s;
+    public void SetFormAdvDeepEnrichmentService(FormAdvDeepEnrichmentService s) => _formAdvDeep = s;
 
     /// <summary>
     /// Returns true if the database has already been populated with advisor data.
@@ -128,6 +155,8 @@ public class BackgroundDataService
 
         progress?.Report($"✓ Initial setup complete. {totalSaved:N0} advisors and {firmsSaved:N0} firms in database.");
         progress?.Report("Background sync will continue adding records over the next hour.");
+        _repo.ResolveAdvisorFirmLinks();
+        _repo.ClassifyRegistrationLevels();
         DataUpdated?.Invoke();
         return totalSaved;
     }
@@ -294,7 +323,25 @@ public class BackgroundDataService
                 var names = await _brokerProtocol.FetchMemberNamesAsync(token);
                 if (names.Count >= 5)
                 {
+                    HashSet<string>? previousMemberCrds = null;
+                    if (_brokerProtocolAlerts != null)
+                        previousMemberCrds = _repo.GetBrokerProtocolMemberCrds();
+
                     var updated = _repo.UpdateBrokerProtocolStatus(names, DateTime.UtcNow);
+
+                    if (_brokerProtocolAlerts != null && previousMemberCrds != null)
+                    {
+                        try
+                        {
+                            var currentMemberCrds = _repo.GetBrokerProtocolMemberCrds();
+                            int bpAlertCount = _brokerProtocolAlerts.DetectAndRecordChanges(
+                                previousMemberCrds, currentMemberCrds, progress);
+                            if (bpAlertCount > 0)
+                                AlertsGenerated?.Invoke(bpAlertCount);
+                        }
+                        catch { /* continue on error */ }
+                    }
+
                     if (updated > 0)
                         progress.Report($"✓ Marked {updated} firms as Broker Protocol members.");
                 }
@@ -315,6 +362,96 @@ public class BackgroundDataService
         }
         catch (OperationCanceledException) { throw; }
         catch { /* continue on error */ }
+
+        // AUM threshold alert check — runs after AUM snapshot is recorded
+        try
+        {
+            if (_aumThresholdAlerts != null)
+            {
+                int alertCount = await _aumThresholdAlerts.CheckAumThresholdsAsync(progress);
+                if (alertCount > 0)
+                    AlertsGenerated?.Invoke(alertCount);
+            }
+        }
+        catch { /* continue on error */ }
+
+        // Market Watch new-registrant check — runs last, after all data is upserted
+        try
+        {
+            if (_marketWatch != null)
+            {
+                var since = DateTime.UtcNow.AddHours(-25);
+                int alertCount = _marketWatch.CheckNewRegistrations(since, progress);
+                if (alertCount > 0)
+                    AlertsGenerated?.Invoke(alertCount);
+            }
+        }
+        catch { /* continue on error */ }
+
+        // Analytics scoring — runs after all data is up to date
+        try
+        {
+            if (_disclosureScorer != null)
+            {
+                await _disclosureScorer.RefreshAllScoresAsync(progress, token);
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { progress.Report($"⚠ Disclosure scoring error: {ex.Message}"); }
+
+        try
+        {
+            if (_mobilityScorer != null)
+            {
+                await _mobilityScorer.RefreshAllScoresAsync(progress, token);
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { progress.Report($"⚠ Mobility scoring error: {ex.Message}"); }
+
+        try
+        {
+            if (_competitiveIntel != null)
+            {
+                await _competitiveIntel.RefreshHeadcountDeltasAsync(progress);
+            }
+        }
+        catch (Exception ex) { progress.Report($"⚠ Competitive intelligence error: {ex.Message}"); }
+
+        _repo.ResolveAdvisorFirmLinks();
+        _repo.ClassifyRegistrationLevels();
+
+        try
+        {
+            if (_finraSanction != null)
+                await _finraSanction.EnrichBatchAsync(progress: progress, ct: token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { progress.Report($"⚠ FINRA sanction enrichment error: {ex.Message}"); }
+
+        try
+        {
+            if (_secEnforcement != null)
+                await _secEnforcement.EnrichBatchAsync(progress: progress, ct: token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { progress.Report($"⚠ SEC enforcement enrichment error: {ex.Message}"); }
+
+        try
+        {
+            if (_courtListener != null)
+                await _courtListener.EnrichBatchAsync(progress: progress, ct: token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { progress.Report($"⚠ CourtListener enrichment error: {ex.Message}"); }
+
+        try
+        {
+            if (_formAdvDeep != null)
+                await _formAdvDeep.EnrichBatchAsync(progress: progress, ct: token);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { progress.Report($"⚠ Form ADV deep enrichment error: {ex.Message}"); }
 
         DataUpdated?.Invoke();
     }
@@ -340,7 +477,7 @@ public class BackgroundDataService
                 var detail = await _finra.GetAdvisorDetailAsync(crd);
                 if (detail != null)
                 {
-                    _repo.UpsertAdvisor(detail);
+                    _repo.UpsertAdvisor(detail, out _, _watchListMonitor);
                     enriched++;
                 }
             }
