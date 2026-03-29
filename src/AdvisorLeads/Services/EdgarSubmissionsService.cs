@@ -201,7 +201,7 @@ public class EdgarSubmissionsService
             progress?.Report($"[{i + 1}/{firms.Count}] Processing {firm.Name} (CRD {firm.CrdNumber})...");
 
             var count = await FetchFilingsForFirmAsync(
-                firm.CrdNumber, firm.SECNumber, cik: null, progress, ct);
+                firm.CrdNumber, firm.SECNumber, cik: firm.EdgarCik, progress, ct);
             totalNew += count;
 
             if (i < firms.Count - 1)

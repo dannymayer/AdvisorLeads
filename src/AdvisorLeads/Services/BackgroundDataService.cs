@@ -32,6 +32,8 @@ public class BackgroundDataService
     private SecEnforcementService? _secEnforcement;
     private CourtListenerService? _courtListener;
     private FormAdvDeepEnrichmentService? _formAdvDeep;
+    private Func<string, string?>? _loadSetting;
+    private Action<string, string>? _saveSetting;
     private CancellationTokenSource? _cts;
     private Task? _refreshTask;
 
@@ -74,6 +76,12 @@ public class BackgroundDataService
     public void SetSecEnforcementService(SecEnforcementService s) => _secEnforcement = s;
     public void SetCourtListenerService(CourtListenerService s) => _courtListener = s;
     public void SetFormAdvDeepEnrichmentService(FormAdvDeepEnrichmentService s) => _formAdvDeep = s;
+
+    public void SetSettingAccessors(Func<string, string?> load, Action<string, string> save)
+    {
+        _loadSetting = load;
+        _saveSetting = save;
+    }
 
     /// <summary>
     /// Returns true if the database has already been populated with advisor data.
@@ -156,6 +164,7 @@ public class BackgroundDataService
         progress?.Report($"✓ Initial setup complete. {totalSaved:N0} advisors and {firmsSaved:N0} firms in database.");
         progress?.Report("Background sync will continue adding records over the next hour.");
         _repo.ResolveAdvisorFirmLinks();
+        _repo.UpdateFirmAdvisorCounts();
         _repo.ClassifyRegistrationLevels();
         DataUpdated?.Invoke();
         return totalSaved;
@@ -315,6 +324,17 @@ public class BackgroundDataService
         catch (OperationCanceledException) { throw; }
         catch { /* continue on error */ }
 
+        // Form ADV historical data — quarterly import
+        try
+        {
+            if (_formAdvHistorical != null && _loadSetting != null && _saveSetting != null)
+            {
+                await RunFormAdvHistoricalImportAsync(_loadSetting, _saveSetting, progress, token);
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { /* non-critical */ }
+
         // Broker Protocol weekly update
         try
         {
@@ -419,6 +439,7 @@ public class BackgroundDataService
         catch (Exception ex) { progress.Report($"⚠ Competitive intelligence error: {ex.Message}"); }
 
         _repo.ResolveAdvisorFirmLinks();
+        _repo.UpdateFirmAdvisorCounts();
         _repo.ClassifyRegistrationLevels();
 
         try

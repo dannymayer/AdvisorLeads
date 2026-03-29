@@ -135,6 +135,7 @@ public class MainForm : Form
 
         var secBulkSubmissions = new SecBulkSubmissionsService(dbPath);
         _bgData.SetSecBulkSubmissionsService(secBulkSubmissions);
+        _bgData.SetSettingAccessors(LoadSetting, SaveSetting);
 
         _dataCleaning = new DataCleaningService(dbPath);
         _reportingService = new ReportingService(_dbPath);
@@ -168,7 +169,7 @@ public class MainForm : Form
         _bgData.SetFinraSanctionService(finraSanction);
         var secEnforcement = new SecEnforcementService(_repo);
         _bgData.SetSecEnforcementService(secEnforcement);
-        var courtListener = new CourtListenerService(_repo);
+        var courtListener = new CourtListenerService(_repo, LoadSetting("CourtListenerApiToken"));
         _bgData.SetCourtListenerService(courtListener);
         var formAdvDeep = new FormAdvDeepEnrichmentService(_repo);
         _bgData.SetFormAdvDeepEnrichmentService(formAdvDeep);
@@ -250,6 +251,7 @@ public class MainForm : Form
 
         _firmDetailPanel = new FirmDetailPanel { Dock = DockStyle.Fill };
         _firmDetailPanel.SetServices(_aumAnalytics, _changeDetection, _formAdvHistorical, _edgarSubmissions, _edgarSearch, _maScoring);
+        _firmDetailPanel.SetAdvisorRepository(_repo);
         _firmDetailPanel.AdvisorNavigationRequested += OnAdvisorNavigationRequested;
         _firmDetailPanel.WatchFirmToggleRequested += OnWatchFirmToggleRequested;
         _firmContentSplit.Panel2.Controls.Add(_firmDetailPanel);
@@ -309,26 +311,35 @@ public class MainForm : Form
 
         _mainTabs.SelectedIndexChanged += (_, _) =>
         {
-            bool shouldCollapse = _mainTabs.SelectedIndex != 1;
-            if (shouldCollapse && !_mainSplit.Panel1Collapsed)
+            try
             {
-                if (_mainSplit.SplitterDistance > 0)
-                    _mainSplitSavedDistance = _mainSplit.SplitterDistance;
-                _mainSplit.Panel1Collapsed = true;
+                bool shouldCollapse = _mainTabs.SelectedIndex != 1;
+                if (shouldCollapse && !_mainSplit.Panel1Collapsed)
+                {
+                    if (_mainSplit.SplitterDistance > 0)
+                        _mainSplitSavedDistance = _mainSplit.SplitterDistance;
+                    _mainSplit.Panel1Collapsed = true;
+                }
+                else if (!shouldCollapse && _mainSplit.Panel1Collapsed)
+                {
+                    _mainSplit.Panel1Collapsed = false;
+                    SetSafeSplitterDistance(_mainSplit, _mainSplitSavedDistance);
+                }
+                if (_mainTabs.SelectedIndex == 0)
+                {
+                    _dashboardPanel.UpdateLastSync(_lastSyncTime?.ToLocalTime());
+                    _ = _dashboardPanel.LoadStatsAsync();
+                }
+                else if (_mainTabs.SelectedIndex == 1)
+                    LoadAdvisors();
+                else if (_mainTabs.SelectedIndex == 2)
+                    LoadFirms();
+                else if (_mainTabs.SelectedIndex == 4)
+                    _analyticsPanel?.LoadDefaultView();
+                else if (_mainTabs.SelectedIndex == 5)
+                    _alertsPanel.RefreshAlerts();
             }
-            else if (!shouldCollapse && _mainSplit.Panel1Collapsed)
-            {
-                _mainSplit.Panel1Collapsed = false;
-                SetSafeSplitterDistance(_mainSplit, _mainSplitSavedDistance);
-            }
-            if (_mainTabs.SelectedIndex == 1)
-                LoadAdvisors();
-            else if (_mainTabs.SelectedIndex == 2)
-                LoadFirms();
-            else if (_mainTabs.SelectedIndex == 4)
-                _analyticsPanel?.LoadDefaultView();
-            else if (_mainTabs.SelectedIndex == 5)
-                _alertsPanel.RefreshAlerts();
+            catch { /* prevent layout corruption from any tab-switch error */ }
         };
 
         // Badge label overlaid on the Alerts tab header
@@ -922,17 +933,17 @@ public class MainForm : Form
         if (advisor == null) return;
         _detailCard.ShowAdvisor(advisor);
 
-        // If the advisor has a disclosure flag but no disclosure records in the DB yet,
-        // silently fetch full FINRA detail in the background and refresh the card once done.
-        // This covers the common case where the bulk fetch set HasDisclosures=true but the
-        // per-advisor enrichment pass had not yet reached this record.
-        // _enrichmentTriggered.Add() returns false if already added, preventing infinite retries
-        // in the edge case where FINRA returns HasDisclosures=true but an empty disclosures array.
+        // Trigger a background detail fetch when the advisor is missing sub-collection data.
+        // Bulk-imported advisors (SEC XML / FINRA bulk search) only carry summary fields;
+        // employment history, registrations, qualifications, and disclosures only arrive via
+        // the per-advisor detail endpoint. Fetch once per CRD per session.
         var crdNumber = advisor.CrdNumber;
-        bool needsDisclosureEnrich = advisor.HasDisclosures
-            && advisor.Disclosures.Count == 0
-            && !string.IsNullOrEmpty(crdNumber)
-            && _enrichmentTriggered.Add(crdNumber!);
+        bool needsDisclosureEnrich = !string.IsNullOrEmpty(crdNumber)
+            && _enrichmentTriggered.Add(crdNumber!)
+            && (advisor.EmploymentHistory.Count == 0
+                || advisor.Registrations.Count == 0
+                || advisor.QualificationList.Count == 0
+                || (advisor.HasDisclosures && advisor.Disclosures.Count == 0));
 
         if (needsDisclosureEnrich)
         {
