@@ -44,7 +44,9 @@ public class SecMonthlyFirmService
     /// "Registered Investment Advisers" ZIP file (excludes Exempt Reporting Advisers).
     /// Returns null if not found.
     /// </summary>
-    public async Task<string?> GetLatestRegisteredAdvisersUrlAsync(CancellationToken ct = default)
+    public async Task<string?> GetLatestRegisteredAdvisersUrlAsync(
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
     {
         string html;
         try
@@ -56,7 +58,7 @@ public class SecMonthlyFirmService
             return null;
         }
 
-        // Find href="...*.zip" where the .zip path does NOT contain "exempt"
+        // Primary: find href="...*.zip" where the path does NOT contain "exempt"
         var matches = Regex.Matches(html,
             @"href=""(/files/investment/data/[^""]+\.zip)""",
             RegexOptions.IgnoreCase);
@@ -68,6 +70,31 @@ public class SecMonthlyFirmService
                 return SecBaseUrl + href;
         }
 
+        // Fallback 1: broader path pattern
+        matches = Regex.Matches(html,
+            @"href=""(/(?:files|cgi-bin)/[^""]+\.zip)""",
+            RegexOptions.IgnoreCase);
+
+        foreach (Match m in matches)
+        {
+            var href = m.Groups[1].Value;
+            if (!href.Contains("exempt", StringComparison.OrdinalIgnoreCase))
+                return SecBaseUrl + href;
+        }
+
+        // Fallback 2: full absolute URLs embedded in the page
+        var fullUrlMatches = Regex.Matches(html,
+            @"""(https?://www\.sec\.gov[^""]+\.zip)""",
+            RegexOptions.IgnoreCase);
+
+        foreach (Match m in fullUrlMatches)
+        {
+            var url = m.Groups[1].Value;
+            if (!url.Contains("exempt", StringComparison.OrdinalIgnoreCase))
+                return url;
+        }
+
+        progress?.Report("Warning: Could not find SEC monthly firm ZIP URL. SEC page structure may have changed.");
         return null;
     }
 
@@ -325,7 +352,7 @@ public class SecMonthlyFirmService
             IsBrokerDealer = isBd,
             IsInsuranceCompany = isInsurance,
             TotalAumRelatedPersons = totalAumRelated,
-            RecordType         = "Investment Advisor",
+            RecordType         = "Investment Adviser",
             IsRegisteredWithSec = true,
             Source             = "SEC",
         };

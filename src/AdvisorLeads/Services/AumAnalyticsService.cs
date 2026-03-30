@@ -63,15 +63,23 @@ public class AumAnalyticsService
 
         if (newSnapshots.Count > 0)
         {
-            // Batch insert in chunks of 5000
-            foreach (var batch in newSnapshots.Chunk(5000))
+            var inputCrds = newSnapshots.Select(s => s.FirmCrd).ToHashSet();
+            var knownCrds = ctx.Firms.AsNoTracking()
+                .Where(f => inputCrds.Contains(f.CrdNumber))
+                .Select(f => f.CrdNumber)
+                .ToHashSet();
+            var validSnapshots = newSnapshots.Where(s => knownCrds.Contains(s.FirmCrd)).ToList();
+
+            foreach (var batch in validSnapshots.Chunk(5000))
             {
                 ctx.FirmAumHistory.AddRange(batch);
                 ctx.SaveChanges();
             }
+
+            return validSnapshots.Count;
         }
 
-        return newSnapshots.Count;
+        return 0;
     }
 
     /// <summary>

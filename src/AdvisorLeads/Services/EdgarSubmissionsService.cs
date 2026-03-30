@@ -45,7 +45,7 @@ public class EdgarSubmissionsService
     /// Returns the number of new filings stored.
     /// </summary>
     public async Task<int> FetchFilingsForFirmAsync(
-        string firmCrd, string? secNumber, string? cik,
+        string firmCrd, string? secNumber, string? cik, string? firmName = null,
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
@@ -57,7 +57,7 @@ public class EdgarSubmissionsService
                 return 0;
             }
 
-            cik = await LookupCikAsync(secNumber, ct);
+            cik = await LookupCikAsync(secNumber, firmName, ct);
             if (string.IsNullOrWhiteSpace(cik))
             {
                 progress?.Report($"Firm {firmCrd}: could not resolve CIK for SEC# {secNumber}.");
@@ -109,6 +109,14 @@ public class EdgarSubmissionsService
 
         using (var ctx = new DatabaseContext(_dbPath))
         {
+            var firmExists = await ctx.Firms.AsNoTracking()
+                .AnyAsync(f => f.CrdNumber == firmCrd, ct);
+            if (!firmExists)
+            {
+                progress?.Report($"Firm {firmCrd}: not in local database, skipping EDGAR filings.");
+                return 0;
+            }
+
             var existingAccessions = ctx.FirmFilings
                 .AsNoTracking()
                 .Where(f => f.FirmCrd == firmCrd)
@@ -201,7 +209,7 @@ public class EdgarSubmissionsService
             progress?.Report($"[{i + 1}/{firms.Count}] Processing {firm.Name} (CRD {firm.CrdNumber})...");
 
             var count = await FetchFilingsForFirmAsync(
-                firm.CrdNumber, firm.SECNumber, cik: firm.EdgarCik, progress, ct);
+                firm.CrdNumber, firm.SECNumber, cik: firm.EdgarCik, firmName: firm.Name, progress, ct);
             totalNew += count;
 
             if (i < firms.Count - 1)
@@ -273,14 +281,15 @@ public class EdgarSubmissionsService
     /// <summary>
     /// Looks up a CIK number from an SEC registration number.
     /// SEC numbers like "801-12345" map to CIK numbers in EDGAR.
-    /// First tries the EDGAR full-text search, then falls back to the EDGAR company browser.
+    /// Tries four approaches: date-limited EFTS search, browse-edgar filenum,
+    /// broad EFTS search, and company name search.
     /// </summary>
-    private async Task<string?> LookupCikAsync(string secNumber, CancellationToken ct)
+    private async Task<string?> LookupCikAsync(string secNumber, string? firmName, CancellationToken ct)
     {
         if (_cikCache.TryGetValue(secNumber, out var cached))
             return cached;
 
-        // Try EDGAR full-text search index
+        // Try EDGAR full-text search index (date-limited to recent filings)
         try
         {
             var searchUrl = $"{CompanySearchUrl}?q=%22{Uri.EscapeDataString(secNumber)}%22&dateRange=custom&startdt=2020-01-01&forms=ADV";
@@ -289,15 +298,15 @@ public class EdgarSubmissionsService
             {
                 var json = await response.Content.ReadAsStringAsync(ct);
                 var result = JObject.Parse(json);
-
-                // The search-index endpoint returns hits with entity information
                 var hits = result.SelectToken("hits.hits");
                 if (hits is JArray arr && arr.Count > 0)
                 {
-                    var cikValue = arr[0].SelectToken("_source.entity_id")?.ToString()
-                                ?? arr[0].SelectToken("_source.file_num")?.ToString();
-                    if (!string.IsNullOrWhiteSpace(cikValue))
+                    var raw = arr[0].SelectToken("_source.entity_id")?.ToString()
+                           ?? arr[0].SelectToken("_source.filer_id")?.ToString();
+                    if (!string.IsNullOrWhiteSpace(raw))
                     {
+                        var cikValue = raw.TrimStart('0');
+                        if (cikValue.Length == 0) cikValue = "0";
                         _cikCache[secNumber] = cikValue;
                         return cikValue;
                     }
@@ -306,27 +315,26 @@ public class EdgarSubmissionsService
         }
         catch
         {
-            // Fall through to alternative lookup
+            // Fall through to next lookup
         }
 
         await Task.Delay(RateLimitDelayMs, ct);
 
-        // Fallback: EDGAR company search via browse-edgar
+        // Fallback: browse-edgar using SEC file/registration number (filenum= parameter)
         try
         {
             var browseUrl =
-                $"https://www.sec.gov/cgi-bin/browse-edgar?company=&CIK={Uri.EscapeDataString(secNumber)}&type=ADV&dateb=&owner=include&count=10&search_text=&action=getcompany";
+                $"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&filenum={Uri.EscapeDataString(secNumber)}&type=ADV&dateb=&owner=include&count=10";
             var response = await _http.GetAsync(browseUrl, ct);
             if (response.IsSuccessStatusCode)
             {
                 var html = await response.Content.ReadAsStringAsync(ct);
-
-                // Extract CIK from the response HTML — look for CIK= pattern in links
                 var cikMatch = System.Text.RegularExpressions.Regex.Match(
                     html, @"CIK=(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (cikMatch.Success)
                 {
-                    var cikValue = cikMatch.Groups[1].Value;
+                    var cikValue = cikMatch.Groups[1].Value.TrimStart('0');
+                    if (cikValue.Length == 0) cikValue = "0";
                     _cikCache[secNumber] = cikValue;
                     return cikValue;
                 }
@@ -334,7 +342,71 @@ public class EdgarSubmissionsService
         }
         catch
         {
-            // Lookup failed
+            // Fall through to next lookup
+        }
+
+        await Task.Delay(RateLimitDelayMs, ct);
+
+        // Third fallback: broad EFTS search without date restriction
+        try
+        {
+            var searchUrl = $"{CompanySearchUrl}?q=%22{Uri.EscapeDataString(secNumber)}%22&forms=ADV&hits.hits.total.value=true";
+            var response = await _http.GetAsync(searchUrl, ct);
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync(ct);
+                var result = JObject.Parse(json);
+                var hits = result.SelectToken("hits.hits");
+                if (hits is JArray arr && arr.Count > 0)
+                {
+                    var raw = arr[0].SelectToken("_source.entity_id")?.ToString()
+                           ?? arr[0].SelectToken("_source.filer_id")?.ToString();
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        var cikValue = raw.TrimStart('0');
+                        if (cikValue.Length == 0) cikValue = "0";
+                        _cikCache[secNumber] = cikValue;
+                        return cikValue;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Fall through to name-based lookup
+        }
+
+        // Fourth fallback: company name search (last resort)
+        if (!string.IsNullOrWhiteSpace(firmName))
+        {
+            await Task.Delay(RateLimitDelayMs, ct);
+            try
+            {
+                var searchUrl = $"{CompanySearchUrl}?q=%22{Uri.EscapeDataString(firmName)}%22&forms=ADV";
+                var response = await _http.GetAsync(searchUrl, ct);
+                if (response.IsSuccessStatusCode)
+                {
+                    var json = await response.Content.ReadAsStringAsync(ct);
+                    var result = JObject.Parse(json);
+                    var hits = result.SelectToken("hits.hits");
+                    if (hits is JArray arr && arr.Count > 0)
+                    {
+                        var raw = arr[0].SelectToken("_source.entity_id")?.ToString()
+                               ?? arr[0].SelectToken("_source.filer_id")?.ToString();
+                        if (!string.IsNullOrWhiteSpace(raw))
+                        {
+                            var cikValue = raw.TrimStart('0');
+                            if (cikValue.Length == 0) cikValue = "0";
+                            _cikCache[secNumber] = cikValue;
+                            return cikValue;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // All lookups failed
+            }
         }
 
         return null;
