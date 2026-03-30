@@ -41,6 +41,14 @@ public class FetchDataDialog : Form
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 0: title
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // 1: query
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // 2: state
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); // 3: sources
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 18)); // 4: progress
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24)); // 5: status
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // 6: log
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46)); // 7: buttons
 
         int row = 0;
 

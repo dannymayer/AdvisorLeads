@@ -231,9 +231,9 @@ public class MainForm : Form
         _dashboardPanel.DataQualityCheckRequested += OnDataQualityCheck;
         // Bug 1: Use BeginInvoke to defer tab navigation — direct SelectedTab assignment from
         // inside a button-click event handler can hit WinForms reentrancy and be silently dropped.
-        _dashboardPanel.BrowseAdvisorsRequested += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedTab = _tabIndividuals));
-        _dashboardPanel.BrowseFirmsRequested    += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedTab = _tabFirms));
-        _dashboardPanel.BrowseReportsRequested  += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedTab = _tabReports));
+        _dashboardPanel.BrowseAdvisorsRequested += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedIndex = 1));
+        _dashboardPanel.BrowseFirmsRequested    += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedIndex = 2));
+        _dashboardPanel.BrowseReportsRequested  += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedIndex = 3));
         _dashboardPanel.UpdateLastSync(_lastSyncTime?.ToLocalTime());
         var tabDashboard = new TabPage("Dashboard") { Padding = new Padding(0) };
         tabDashboard.Controls.Add(_dashboardPanel);
@@ -1019,28 +1019,32 @@ public class MainForm : Form
 
     // ── Event handlers ─────────────────────────────────────────────────
 
-    private async void OnFetchData(object? sender, EventArgs e)
+    private void OnFetchData(object? sender, EventArgs e)
     {
-        using var dlg = new FetchDataDialog();
+        var dlg = new FetchDataDialog();
         dlg.FetchRequested += async (_, args) =>
         {
             try
             {
-                var progress = new Progress<string>(msg => dlg.SetProgress(msg));
+                var progress = new Progress<string>(msg =>
+                {
+                    if (!dlg.IsDisposed) dlg.SetProgress(msg);
+                });
                 var results = await _sync.FetchAndSyncAsync(
                     args.Query, args.State,
                     args.IncludeFinra, args.IncludeSec,
                     progress);
 
-                dlg.FetchComplete(results.NewCount, results.UpdatedCount);
+                if (!dlg.IsDisposed) dlg.FetchComplete(results.NewCount, results.UpdatedCount);
                 LoadAdvisors();
                 LoadFilterOptions();
             }
             catch (Exception ex)
             {
-                dlg.FetchFailed(ex.Message);
+                if (!dlg.IsDisposed) dlg.FetchFailed(ex.Message);
             }
         };
+        dlg.FormClosed += (_, _) => dlg.Dispose();
         dlg.ShowDialog(this);
     }
 
