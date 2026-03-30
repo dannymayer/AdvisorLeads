@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.RegularExpressions;
+using AdvisorLeads.Abstractions;
 using Newtonsoft.Json.Linq;
 using AdvisorLeads.Models;
 
@@ -9,7 +10,7 @@ namespace AdvisorLeads.Services;
 /// Fetches individual broker/adviser records from the FINRA BrokerCheck public JSON API.
 /// API base: https://api.brokercheck.finra.org
 /// </summary>
-public class FinraService
+public class FinraService : IFinraProvider, IAdvisorDataSource
 {
     private static readonly HttpClient _http = CreateHttpClient();
 
@@ -30,41 +31,60 @@ public class FinraService
 
     /// <summary>
     /// Searches FINRA BrokerCheck for individual advisors matching a query.
+    /// Automatically paginates through all available results up to <paramref name="maxResults"/>.
     /// </summary>
     public async Task<List<Advisor>> SearchAdvisorsAsync(string query, string? state = null,
-        int from = 0, int size = 12, IProgress<string>? progress = null)
+        int from = 0, int size = 100, IProgress<string>? progress = null, int maxResults = 10000)
     {
         progress?.Report($"Searching FINRA for \"{query}\"...");
 
+        var advisors = new List<Advisor>();
+
         try
         {
-            var url = $"{ApiBase}/search/individual" +
-                      $"?query={Uri.EscapeDataString(query)}" +
-                      $"&hl=true&includePrevious=true" +
-                      $"&nrows={size}&start={from}&r=25&wt=json";
+            int start = from;
 
-            var json = await _http.GetStringAsync(url);
-            var root = JObject.Parse(json);
-            var hits = root["hits"]?["hits"] as JArray;
-
-            if (hits == null || hits.Count == 0)
+            while (advisors.Count < maxResults)
             {
-                progress?.Report($"FINRA: No results found for \"{query}\".");
-                return new List<Advisor>();
-            }
+                var url = $"{ApiBase}/search/individual" +
+                          $"?query={Uri.EscapeDataString(query)}" +
+                          $"&hl=true&includePrevious=true" +
+                          $"&nrows={size}&start={start}&r=25&wt=json";
 
-            var advisors = new List<Advisor>();
-            foreach (var hit in hits)
-            {
-                var advisor = ParseHit(hit);
-                if (advisor != null)
+                var json = await _http.GetStringAsync(url);
+                var root = JObject.Parse(json);
+                var hitsObj = root["hits"] as JObject;
+                var hits = hitsObj?["hits"] as JArray;
+
+                if (hits == null || hits.Count == 0)
+                    break;
+
+                // Parse total available results from the response
+                var totalToken = hitsObj?["total"];
+                int totalAvailable = (totalToken as JObject)?["value"]?.Value<int>()
+                    ?? totalToken?.Value<int?>() ?? 0;
+
+                foreach (var hit in hits)
                 {
+                    var advisor = ParseHit(hit);
+                    if (advisor == null) continue;
+
                     if (!string.IsNullOrWhiteSpace(state) &&
                         !string.Equals(advisor.State, state, StringComparison.OrdinalIgnoreCase))
                         continue;
 
                     advisors.Add(advisor);
                 }
+
+                progress?.Report($"FINRA: fetched {advisors.Count}" +
+                    (totalAvailable > 0 ? $" of {totalAvailable} result(s)..." : " result(s)..."));
+
+                // Stop if we've fetched all available results or hit the cap
+                if (hits.Count < size || (totalAvailable > 0 && start + size >= totalAvailable))
+                    break;
+
+                start += size;
+                await Task.Delay(300);
             }
 
             progress?.Report($"✓ Found {advisors.Count} result(s) from FINRA.");
@@ -73,43 +93,86 @@ public class FinraService
         catch (Exception ex)
         {
             progress?.Report($"FINRA search error: {ex.Message}");
-            return new List<Advisor>();
+            return advisors; // Return what we have so far rather than an empty list
         }
+    }
+
+    /// <summary>
+    /// Issues a GET request with exponential backoff retry on HTTP 429 (Too Many Requests).
+    /// Respects the Retry-After header when present; otherwise backs off at 2 s, 4 s, 8 s.
+    /// </summary>
+    private static async Task<string> GetWithRetryAsync(string url, int maxRetries = 3)
+    {
+        int delayMs = 2000;
+        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            var response = await _http.GetAsync(url);
+            if (response.IsSuccessStatusCode)
+                return await response.Content.ReadAsStringAsync();
+
+            if ((int)response.StatusCode == 429)
+            {
+                if (attempt == maxRetries)
+                    response.EnsureSuccessStatusCode(); // throws on final attempt
+
+                // Honour Retry-After header if present
+                int wait = delayMs;
+                if (response.Headers.TryGetValues("Retry-After", out var vals)
+                    && int.TryParse(vals.FirstOrDefault(), out int retryAfterSec))
+                {
+                    wait = retryAfterSec * 1000 + 500;
+                }
+
+                await Task.Delay(wait);
+                delayMs *= 2; // exponential backoff
+                continue;
+            }
+
+            response.EnsureSuccessStatusCode(); // throws for other non-success codes
+        }
+
+        throw new InvalidOperationException("Retry loop exhausted unexpectedly.");
     }
 
     /// <summary>
     /// Fetches full details for a single advisor by CRD number.
     /// Uses /search/individual/{crd} which returns _source.content as rich nested JSON.
+    /// Includes a 500 ms base delay and exponential backoff retry on HTTP 429.
     /// </summary>
     public async Task<Advisor?> GetAdvisorDetailAsync(string crd, IProgress<string>? progress = null)
     {
+        // Base throttle: 500 ms between every detail call to stay well under FINRA's rate limit.
+        await Task.Delay(500);
+
         try
         {
             // /search/individual/{crd} returns _source.content as a nested JSON string with rich data
             var url = $"{ApiBase}/search/individual/{Uri.EscapeDataString(crd)}";
-            var json = await _http.GetStringAsync(url);
+            var json = await GetWithRetryAsync(url);
             var root = JObject.Parse(json);
-            var hits = root["hits"]?["hits"] as JArray;
+            var hits = (root["hits"] as JObject)?["hits"] as JArray;
 
             if (hits != null && hits.Count > 0)
             {
                 // Prefer the hit that matches the requested CRD
                 var hit = hits.FirstOrDefault(h =>
                 {
-                    var contentStr = h["_source"]?["content"]?.ToString();
-                    if (!string.IsNullOrEmpty(contentStr))
+                    var srcObj = h["_source"] as JObject;
+                    var contentStr = srcObj?["content"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(contentStr) && contentStr.TrimStart().StartsWith("{"))
                     {
                         try
                         {
-                            var id = JObject.Parse(contentStr)["basicInformation"]?["individualId"]?.ToString();
+                            var id = (JObject.Parse(contentStr) as JObject)?["basicInformation"]
+                                ?["individualId"]?.ToString();
                             return string.Equals(id, crd, StringComparison.OrdinalIgnoreCase);
                         }
                         catch { }
                     }
-                    return string.Equals(h["_source"]?["ind_source_id"]?.ToString(), crd, StringComparison.OrdinalIgnoreCase);
+                    return string.Equals(srcObj?["ind_source_id"]?.ToString(), crd, StringComparison.OrdinalIgnoreCase);
                 }) ?? hits[0];
 
-                var src = hit["_source"];
+                var src = hit["_source"] as JObject;
                 var contentStr2 = src?["content"]?.ToString();
                 if (!string.IsNullOrEmpty(contentStr2))
                     return ParseDetailContent(crd, contentStr2);
@@ -119,13 +182,14 @@ public class FinraService
 
             // Fallback: search by CRD
             var searchUrl = $"{ApiBase}/search/individual?query={Uri.EscapeDataString(crd)}&hl=true&includePrevious=true&nrows=5&start=0&r=25&wt=json";
-            var searchJson = await _http.GetStringAsync(searchUrl);
+            var searchJson = await GetWithRetryAsync(searchUrl);
             var searchRoot = JObject.Parse(searchJson);
-            var searchHits = searchRoot["hits"]?["hits"] as JArray;
+            var searchHitsObj = searchRoot["hits"] as JObject;
+            var searchHits = searchHitsObj?["hits"] as JArray;
             if (searchHits == null || searchHits.Count == 0) return null;
             foreach (var h in searchHits)
             {
-                if (string.Equals(h["_source"]?["ind_source_id"]?.ToString(), crd, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals((h["_source"] as JObject)?["ind_source_id"]?.ToString(), crd, StringComparison.OrdinalIgnoreCase))
                     return ParseHit(h);
             }
             return ParseHit(searchHits[0]);
@@ -159,8 +223,12 @@ public class FinraService
             var iaScope = basic["iaScope"]?.ToString() ?? "";
             bool isActiveBC = NormalizeStatus(bcScope) == "Active";
             bool isActiveIA = NormalizeStatus(iaScope) == "Active";
+            string? registrationLevel = isActiveIA && isActiveBC ? "Dual"
+                : isActiveIA ? "Federal"
+                : isActiveBC ? "State"
+                : null;
 
-            var disclosureFlag = c["disclosureFlag"]?.ToString() ?? "";
+            var disclosureFlag= c["disclosureFlag"]?.ToString() ?? "";
             var iaDisclosureFlag = c["iaDisclosureFlag"]?.ToString() ?? "";
             var hasDisclosures = string.Equals(disclosureFlag, "Y", StringComparison.OrdinalIgnoreCase)
                               || string.Equals(iaDisclosureFlag, "Y", StringComparison.OrdinalIgnoreCase);
@@ -193,8 +261,14 @@ public class FinraService
 
             void AddCurrentEmp(JToken emp)
             {
-                var firmName = emp["firmName"]?.ToString()?.Trim() ?? "";
-                var firmId = emp["firmId"]?.ToString()?.Trim() ?? "";
+                var firmName = emp["firmName"]?.ToString()?.Trim()
+                    ?? emp["orgName"]?.ToString()?.Trim()
+                    ?? emp["businessName"]?.ToString()?.Trim()
+                    ?? "";
+                var firmId = emp["firmId"]?.ToString()?.Trim()
+                    ?? emp["iaFirmCrd"]?.ToString()?.Trim()
+                    ?? emp["orgPK"]?.ToString()?.Trim()
+                    ?? "";
                 var iaOnly = emp["iaOnly"]?.ToString()?.Trim() ?? "";
                 var beginDate = emp["registrationBeginDate"]?.ToString();
                 DateTime? startDt = DateTime.TryParse(beginDate, out var sd) ? sd : (DateTime?)null;
@@ -235,7 +309,10 @@ public class FinraService
 
             void AddPrevEmp(JToken emp)
             {
-                var firmName = emp["firmName"]?.ToString()?.Trim() ?? "";
+                var firmName = emp["firmName"]?.ToString()?.Trim()
+                    ?? emp["orgName"]?.ToString()?.Trim()
+                    ?? emp["businessName"]?.ToString()?.Trim()
+                    ?? "";
                 var firmId = emp["firmId"]?.ToString()?.Trim() ?? "";
                 var iaOnly = emp["iaOnly"]?.ToString()?.Trim() ?? "";
                 var beginDate = emp["registrationBeginDate"]?.ToString();
@@ -327,6 +404,29 @@ public class FinraService
                 }
             }
 
+            // Parse SRO registrations from the sroRegistrations array
+            var sroRegs = c["sroRegistrations"] as JArray;
+            if (sroRegs != null)
+            {
+                foreach (var s in sroRegs)
+                {
+                    var sroName = s["sroName"]?.ToString()?.Trim()
+                        ?? s["sro"]?.ToString()?.Trim()
+                        ?? s["organization"]?.ToString()?.Trim();
+                    if (string.IsNullOrEmpty(sroName)) continue;
+                    registrationList.Add(new AdvisorRegistration
+                    {
+                        RegistrationType = "SRO",
+                        SroName = sroName,
+                        RegistrationStatus = s["status"]?.ToString()?.Trim()
+                            ?? s["registrationStatus"]?.ToString()?.Trim(),
+                        StatusDate = s["sinceDate"]?.ToString()?.Trim()
+                            ?? s["statusDate"]?.ToString()?.Trim()
+                            ?? s["registrationDate"]?.ToString()?.Trim(),
+                    });
+                }
+            }
+
             // Disclosures
             var disclosureList = new List<Disclosure>();
             var disclosures = c["disclosures"] as JArray;
@@ -412,8 +512,8 @@ public class FinraService
                 RegAuthorities = regAuthorities,
                 Source = "FINRA",
                 RecordType = recordType,
-                BcScope = string.IsNullOrWhiteSpace(bcScope) ? null : bcScope,
-                IaScope = string.IsNullOrWhiteSpace(iaScope) ? null : iaScope,
+                BcScope = string.IsNullOrWhiteSpace(bcScope) ? null : NormalizeStatus(bcScope),
+                IaScope = string.IsNullOrWhiteSpace(iaScope) ? null : NormalizeStatus(iaScope),
                 HasCriminalDisclosure = hasCriminal,
                 HasRegulatoryDisclosure = hasRegulatory,
                 HasCivilDisclosure = hasCivil,
@@ -422,7 +522,9 @@ public class FinraService
                 HasTerminationDisclosure = hasTermination,
                 BcDisclosureCount = bcDiscCount,
                 IaDisclosureCount = iaDiscCount,
+                RegistrationLevel = registrationLevel,
                 BrokerCheckUrl = $"https://brokercheck.finra.org/individual/summary/{crd}",
+                BrokerCheckReportPdfUrl = $"https://files.brokercheck.finra.org/individual/individual_{crd}.pdf",
                 CareerStartDate = careerStartDate,
                 TotalFirmCount = totalFirmCount > 0 ? totalFirmCount : (int?)null,
                 EmploymentHistory = employmentHistory,
@@ -573,7 +675,7 @@ public class FinraService
 
             var json = await _http.GetStringAsync(url);
             var root = JObject.Parse(json);
-            var hits = root["hits"]?["hits"] as JArray;
+            var hits = (root["hits"] as JObject)?["hits"] as JArray;
 
             if (hits == null || hits.Count == 0)
                 return new List<Firm>();
@@ -626,7 +728,7 @@ public class FinraService
 
                     var json = await _http.GetStringAsync(url);
                     var root = JObject.Parse(json);
-                    var hits = root["hits"]?["hits"] as JArray;
+                    var hits = (root["hits"] as JObject)?["hits"] as JArray;
 
                     if (hits == null || hits.Count == 0) break;
 
@@ -670,7 +772,7 @@ public class FinraService
 
         var json = await _http.GetStringAsync(url);
         var root = JObject.Parse(json);
-        var hits = root["hits"]?["hits"] as JArray;
+        var hits = (root["hits"] as JObject)?["hits"] as JArray;
 
         if (hits == null || hits.Count == 0)
             return new List<Advisor>();
@@ -688,10 +790,22 @@ public class FinraService
     {
         try
         {
-            var src = hit["_source"];
+            var src = hit["_source"] as JObject;
             if (src == null) return null;
 
             var crd = src["ind_source_id"]?.ToString() ?? "";
+
+            // Use the richer content-based parse when full detail is embedded in the hit
+            var contentStr = src["content"]?.ToString();
+            if (!string.IsNullOrWhiteSpace(contentStr) && contentStr.TrimStart().StartsWith("{"))
+            {
+                try
+                {
+                    var detailed = ParseDetailContent(crd, contentStr);
+                    if (detailed != null) return detailed;
+                }
+                catch { }
+            }
             var firstName = src["ind_firstname"]?.ToString()?.Trim() ?? "";
             var lastName = src["ind_lastname"]?.ToString()?.Trim() ?? "";
             var middleName = src["ind_middlename"]?.ToString()?.Trim();
@@ -707,8 +821,8 @@ public class FinraService
             var bcScope = src["ind_bc_scope"]?.ToString() ?? "";
             var iaScope = src["ind_ia_scope"]?.ToString() ?? "";
 
-            bool isActiveBC = !string.IsNullOrEmpty(bcScope) && bcScope != "NotInScope";
-            bool isActiveIA = !string.IsNullOrEmpty(iaScope) && iaScope != "NotInScope";
+            bool isActiveBC = NormalizeStatus(bcScope) == "Active";
+            bool isActiveIA = NormalizeStatus(iaScope) == "Active";
 
             string recordType;
             if (isActiveIA && isActiveBC)
@@ -833,6 +947,12 @@ public class FinraService
                 Licenses = licenses,
                 Source = "FINRA",
                 RecordType = recordType,
+                BcScope = string.IsNullOrWhiteSpace(bcScope) ? null : NormalizeStatus(bcScope),
+                IaScope = string.IsNullOrWhiteSpace(iaScope) ? null : NormalizeStatus(iaScope),
+                RegistrationLevel = isActiveIA && isActiveBC ? "Dual"
+                    : isActiveIA ? "Federal"
+                    : isActiveBC ? "State"
+                    : null,
                 EmploymentHistory = employmentHistory,
                 QualificationList = qualificationList
             };
@@ -847,7 +967,7 @@ public class FinraService
     {
         try
         {
-            var src = hit["_source"];
+            var src = hit["_source"] as JObject;
             if (src == null) return null;
 
             var crd = src["firm_source_id"]?.ToString() ?? "";
@@ -888,7 +1008,7 @@ public class FinraService
                 catch { }
             }
 
-            var recordType = isActiveIa ? "Investment Advisor" : "Broker-Dealer";
+            var recordType = isActiveIa ? "Investment Adviser" : "Broker-Dealer";
 
             return new Firm
             {
@@ -932,7 +1052,10 @@ public class FinraService
         {
             return (
                 obj["firm_name"]?.ToString()?.Trim() ?? "",
-                obj["firm_id"]?.ToString()?.Trim() ?? "",
+                obj["firm_id"]?.ToString()?.Trim()
+                    ?? obj["ia_firm_crd"]?.ToString()?.Trim()
+                    ?? obj["firm_crd"]?.ToString()?.Trim()
+                    ?? "",
                 obj["branch_city"]?.ToString()?.Trim() ?? "",
                 obj["branch_state"]?.ToString()?.Trim() ?? "",
                 obj["branch_zip"]?.ToString()?.Trim() ?? "",
@@ -961,5 +1084,15 @@ public class FinraService
         if (string.IsNullOrWhiteSpace(value)) return "";
         return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(value.ToLower());
     }
+
+    // IAdvisorDataSource
+    public string SourceTag => "FINRA";
+
+    Task<List<Advisor>> IAdvisorDataSource.SearchAsync(string query, string? state,
+        IProgress<string>? progress, CancellationToken token)
+        => SearchAdvisorsAsync(query, state, progress: progress);
+
+    Task<Advisor?> IAdvisorDataSource.GetDetailAsync(string crd, IProgress<string>? progress)
+        => GetAdvisorDetailAsync(crd, progress);
 }
 
