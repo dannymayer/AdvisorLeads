@@ -2,6 +2,10 @@
 
 A portable .NET 8 WinForms desktop application for researching and recruiting financial advisors. It aggregates data from FINRA BrokerCheck, SEC IAPD, and SEC EDGAR into a local SQLite database and provides tools for filtering, scoring, and exporting advisor contacts.
 
+## Documentation
+
+- 📖 [Getting Started Guide](docs/getting-started.md) — Download, first launch, finding advisors, saving favorites
+
 ## Download
 
 Download the latest release from the [Releases page](https://github.com/dannymayer/AdvisorLeads/releases).
