@@ -1,7 +1,9 @@
+using AdvisorLeads.Abstractions;
 using AdvisorLeads.Controls;
 using AdvisorLeads.Data;
 using AdvisorLeads.Models;
 using AdvisorLeads.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AdvisorLeads.Forms;
 
@@ -37,7 +39,7 @@ public class MainForm : Form
     // UI components
     private FilterPanel _filterPanel = null!;
     private FirmFilterPanel _firmFilterPanel = null!;
-    private ListView _advisorListView = null!;
+    private Panel _advisorCardPanel = null!;
     private AdvisorDetailCard _detailCard = null!;
     private SplitContainer _mainSplit = null!;
     private SplitContainer _contentSplit = null!;
@@ -79,100 +81,62 @@ public class MainForm : Form
     private CancellationTokenSource? _searchCts;
     private System.Windows.Forms.Timer? _dashboardRefreshTimer;
 
-    public MainForm()
+    public MainForm(IServiceProvider serviceProvider)
     {
-        InitializeServices();
+        ResolveServices(serviceProvider);
         BuildUI();
         LoadAdvisors();
         LoadFilterOptions();
         this.Shown += OnFormShown;
     }
 
-    private void InitializeServices()
+    private void ResolveServices(IServiceProvider provider)
     {
         var appData = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "AdvisorLeads");
-        Directory.CreateDirectory(appData);
-        var dbPath = Path.Combine(appData, "advisorleads.db");
-        _dbPath = dbPath;
+        _dbPath = Path.Combine(appData, "advisorleads.db");
 
-        using (var initDb = new DatabaseContext(dbPath))
-        {
-            initDb.InitializeDatabase();
-        }
-        _repo = new AdvisorRepository(dbPath);
-        _alertRepo = new AlertRepository(dbPath);
-        _finra = new FinraService();
-        _secStub = new SecIapdService();
-        _sec = new SecCompilationService();
-        _sync = new DataSyncService(_finra, _secStub, _repo);
-        _bgData = new BackgroundDataService(_finra, _sec, _repo);
+        _repo = provider.GetRequiredService<AdvisorRepository>();
+        _alertRepo = provider.GetRequiredService<AlertRepository>();
+        _finra = provider.GetRequiredService<FinraService>();
+        _secStub = provider.GetRequiredService<SecIapdService>();
+        _sec = provider.GetRequiredService<SecCompilationService>();
+        _sync = provider.GetRequiredService<DataSyncService>();
+        _bgData = provider.GetRequiredService<BackgroundDataService>();
         _bgData.DataUpdated += OnBackgroundDataUpdated;
         _bgData.AlertsGenerated += OnAlertsGenerated;
-        _secMonthly = new SecMonthlyFirmService();
-        _bgData.SetSecMonthlyService(_secMonthly);
-        _brokerProtocolService = new BrokerProtocolService();
-        _bgData.SetBrokerProtocolService(_brokerProtocolService);
-        _iapd = new SecIapdEnrichmentService(_repo);
-        _bgData.SetIapdService(_iapd);
-        _listRepo = new ListRepository(dbPath);
+        _secMonthly = provider.GetRequiredService<SecMonthlyFirmService>();
+        _brokerProtocolService = provider.GetRequiredService<BrokerProtocolService>();
+        _iapd = provider.GetRequiredService<SecIapdEnrichmentService>();
+        _listRepo = provider.GetRequiredService<ListRepository>();
 
-        // SEC EDGAR intelligence services
-        _aumAnalytics = new AumAnalyticsService(dbPath);
-        _changeDetection = new ChangeDetectionService(dbPath);
-        _formAdvHistorical = new FormAdvHistoricalService(dbPath);
-        _edgarSubmissions = new EdgarSubmissionsService(dbPath);
-        _edgarSearch = new EdgarSearchService(dbPath);
-        _maScoring = new MaTargetScoringService(dbPath, _aumAnalytics, _changeDetection, _formAdvHistorical, _edgarSubmissions, _edgarSearch);
+        _aumAnalytics = provider.GetRequiredService<AumAnalyticsService>();
+        _changeDetection = provider.GetRequiredService<ChangeDetectionService>();
+        _formAdvHistorical = provider.GetRequiredService<FormAdvHistoricalService>();
+        _edgarSubmissions = provider.GetRequiredService<EdgarSubmissionsService>();
+        _edgarSearch = provider.GetRequiredService<EdgarSearchService>();
+        _maScoring = provider.GetRequiredService<MaTargetScoringService>();
 
-        _bgData.SetAumAnalyticsService(_aumAnalytics);
-        _bgData.SetChangeDetectionService(_changeDetection);
-        _bgData.SetMaScoringService(_maScoring);
-        _bgData.SetEdgarSubmissionsService(_edgarSubmissions);
-        _bgData.SetEdgarSearchService(_edgarSearch);
-        _bgData.SetFormAdvHistoricalService(_formAdvHistorical);
+        _dataCleaning = provider.GetRequiredService<DataCleaningService>();
+        _reportingService = provider.GetRequiredService<ReportingService>();
 
-        var secBulkSubmissions = new SecBulkSubmissionsService(dbPath);
-        _bgData.SetSecBulkSubmissionsService(secBulkSubmissions);
-        _bgData.SetSettingAccessors(LoadSetting, SaveSetting);
+        _disclosureScoringService = provider.GetRequiredService<DisclosureScoringService>();
+        _mobilityScoreService     = provider.GetRequiredService<MobilityScoreService>();
+        _geoService               = provider.GetRequiredService<GeographicAggregationService>();
+        _competitiveService       = provider.GetRequiredService<CompetitiveIntelligenceService>();
+        _teamLiftService          = provider.GetRequiredService<TeamLiftDetectionService>();
 
-        _dataCleaning = new DataCleaningService(dbPath);
-        _reportingService = new ReportingService(_dbPath);
-        // Load saved Wealthbox token
+        _wealthbox = provider.GetService<WealthboxService>();
+        _hunterService = provider.GetService<HunterService>();
+
+        // Load saved Wealthbox token for settings UI tracking
         _wealthboxToken = LoadSetting("WealthboxToken") ?? string.Empty;
-        if (!string.IsNullOrEmpty(_wealthboxToken))
-            _wealthbox = new WealthboxService(_wealthboxToken);
-
-        // Load saved Hunter.io API key
-        var hunterKey = LoadSetting("HunterApiKey");
-        if (!string.IsNullOrEmpty(hunterKey))
-            _hunterService = new HunterService(hunterKey);
 
         // Load last sync time
         var syncStr = LoadSetting("LastSyncTime");
         if (DateTime.TryParse(syncStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var syncTime))
             _lastSyncTime = syncTime;
-
-        // Analytics & Intelligence services
-        _disclosureScoringService = new DisclosureScoringService(_repo);
-        _mobilityScoreService     = new MobilityScoreService(_repo, _disclosureScoringService);
-        _geoService               = new GeographicAggregationService(_repo);
-        _competitiveService       = new CompetitiveIntelligenceService(_repo);
-        _teamLiftService          = new TeamLiftDetectionService(_dbPath);
-        _bgData.SetDisclosureScoringService(_disclosureScoringService);
-        _bgData.SetMobilityScoreService(_mobilityScoreService);
-        _bgData.SetCompetitiveIntelligenceService(_competitiveService);
-
-        // Cat1 enrichment services
-        var finraSanction = new FinraSanctionService(_finra, _repo);
-        _bgData.SetFinraSanctionService(finraSanction);
-        var secEnforcement = new SecEnforcementService(_repo);
-        _bgData.SetSecEnforcementService(secEnforcement);
-        var courtListener = new CourtListenerService(_repo, LoadSetting("CourtListenerApiToken"));
-        _bgData.SetCourtListenerService(courtListener);
-        var formAdvDeep = new FormAdvDeepEnrichmentService(_repo);
-        _bgData.SetFormAdvDeepEnrichmentService(formAdvDeep);
     }
 
     private void BuildUI()
@@ -216,9 +180,9 @@ public class MainForm : Form
             Orientation = Orientation.Vertical
         };
 
-        // Virtual-mode advisor list (individuals)
-        BuildAdvisorListView();
-        _contentSplit.Panel1.Controls.Add(_advisorListView);
+        // Advisor card panel (individuals)
+        BuildAdvisorCardPanel();
+        _contentSplit.Panel1.Controls.Add(_advisorCardPanel);
 
         // Detail card (individuals)
         _detailCard = new AdvisorDetailCard { Dock = DockStyle.Fill };
@@ -264,20 +228,24 @@ public class MainForm : Form
         _dashboardPanel.DataQualityCheckRequested += OnDataQualityCheck;
         _dashboardPanel.BrowseAdvisorsRequested += (_, _) => _mainTabs.SelectedIndex = 1;
         _dashboardPanel.BrowseFirmsRequested += (_, _) => _mainTabs.SelectedIndex = 2;
+        _dashboardPanel.BrowseReportsRequested += (_, _) => _mainTabs.SelectedIndex = 3;
         _dashboardPanel.UpdateLastSync(_lastSyncTime?.ToLocalTime());
         var tabDashboard = new TabPage("Dashboard") { Padding = new Padding(0) };
         tabDashboard.Controls.Add(_dashboardPanel);
 
         var tabIndividuals = new TabPage("Individuals") { Padding = new Padding(0) };
         tabIndividuals.Controls.Add(_contentSplit);
+        tabIndividuals.Controls.Add(MakeNavBar());
         var tabFirms = new TabPage("Firms") { Padding = new Padding(0) };
         tabFirms.Controls.Add(_firmContentSplit);
+        tabFirms.Controls.Add(MakeNavBar());
         _mainTabs.TabPages.Add(tabDashboard);
         _mainTabs.TabPages.Add(tabIndividuals);
         _mainTabs.TabPages.Add(tabFirms);
         _reportsPanel = new ReportsPanel(_reportingService) { Dock = DockStyle.Fill };
         var tabReports = new TabPage("Reports") { Padding = new Padding(0) };
         tabReports.Controls.Add(_reportsPanel);
+        tabReports.Controls.Add(MakeNavBar());
         _mainTabs.TabPages.Add(tabReports);
 
         // Alerts tab (index 5)
@@ -298,6 +266,7 @@ public class MainForm : Form
         };
         _tabAlerts = new TabPage("Alerts") { Padding = new Padding(0) };
         _tabAlerts.Controls.Add(_alertsPanel);
+        _tabAlerts.Controls.Add(MakeNavBar());
 
         // Analytics tab (index 4) — inserted before Alerts
         var tabAnalytics = new TabPage("Analytics") { Padding = new Padding(0) };
@@ -305,6 +274,7 @@ public class MainForm : Form
             _repo, _geoService!, _competitiveService!, _teamLiftService!, _mobilityScoreService!);
         _analyticsPanel.Dock = DockStyle.Fill;
         tabAnalytics.Controls.Add(_analyticsPanel);
+        tabAnalytics.Controls.Add(MakeNavBar());
         _mainTabs.TabPages.Add(tabAnalytics);
 
         _mainTabs.TabPages.Add(_tabAlerts);
@@ -460,6 +430,15 @@ public class MainForm : Form
 
         _menuStrip.Items.AddRange(new ToolStripItem[] { dataMenu, crmMenu, listsMenu, viewMenu, helpMenu, debugMenu });
 
+        // Dashboard shortcut — always the first item so it's easy to find
+        var menuHome = new ToolStripMenuItem("🏠 Dashboard");
+        menuHome.Click += (_, _) => _mainTabs.SelectedIndex = 0;
+        _menuStrip.Items.Insert(0, menuHome);
+
+        var menuReports = new ToolStripMenuItem("📊 &Reports");
+        menuReports.Click += (_, _) => _mainTabs.SelectedIndex = 3;
+        _menuStrip.Items.Insert(1, menuReports);
+
         // Tools menu — insert before Help
         var toolsMenu = new ToolStripMenuItem("&Tools");
         var dataQualityItem = new ToolStripMenuItem("&Data Quality Manager...", null, OnOpenDataQuality)
@@ -485,75 +464,51 @@ public class MainForm : Form
         this.MainMenuStrip = _menuStrip;
     }
 
-    private void BuildAdvisorListView()
+    /// <summary>Creates the "← Dashboard" breadcrumb bar shown at the top of every non-Dashboard tab.</summary>
+    private Panel MakeNavBar()
     {
-        _advisorListView = new ListView
+        var navBar = new Panel { Dock = DockStyle.Top, Height = 28, BackColor = SystemColors.ControlLight };
+        var lnkHome = new LinkLabel
+        {
+            Text = "← Dashboard",
+            Location = new Point(8, 6),
+            AutoSize = true,
+            LinkColor = Color.FromArgb(0, 102, 204)
+        };
+        lnkHome.LinkClicked += (_, _) => _mainTabs.SelectedIndex = 0;
+        navBar.Controls.Add(lnkHome);
+        return navBar;
+    }
+
+    private void BuildAdvisorCardPanel()
+    {
+        _advisorCardPanel = new Panel
         {
             Dock = DockStyle.Fill,
-            View = View.Details,
-            FullRowSelect = true,
-            VirtualMode = true,
-            MultiSelect = false,
-            GridLines = true,
-            Font = new Font("Segoe UI", 9),
+            AutoScroll = true,
             BorderStyle = BorderStyle.None
         };
 
-        _advisorListView.Columns.Add("Name", 180);
-        _advisorListView.Columns.Add("Firm", 200);
-        _advisorListView.Columns.Add("State", 50);
-        _advisorListView.Columns.Add("Type", 90);
-        _advisorListView.Columns.Add("Yrs Exp", 65);
-        _advisorListView.Columns.Add("Disclosures", 85);
-        _advisorListView.Columns.Add("Source", 55);
-
-        _advisorListView.VirtualListSize = 0;
-        _advisorListView.RetrieveVirtualItem += OnRetrieveVirtualItem;
-        _advisorListView.SelectedIndexChanged += OnAdvisorListViewSelectionChanged;
-        _advisorListView.ContextMenuStrip = BuildCardContextMenu();
-    }
-
-    private void OnRetrieveVirtualItem(object? sender, RetrieveVirtualItemEventArgs e)
-    {
-        if (e.ItemIndex < 0 || e.ItemIndex >= _currentAdvisors.Count)
+        var contextMenu = BuildCardContextMenu();
+        contextMenu.Opening += (_, _) =>
         {
-            e.Item = new ListViewItem();
-            return;
-        }
+            // Walk up to find the AdvisorCard that owns the right-clicked control
+            Control? src = contextMenu.SourceControl;
+            while (src != null && src is not AdvisorCard)
+                src = src.Parent;
 
-        var advisor = _currentAdvisors[e.ItemIndex];
-        var item = new ListViewItem(advisor.FullName);
-        item.SubItems.Add(advisor.CurrentFirmName ?? "");
-        item.SubItems.Add(advisor.State ?? "");
-        item.SubItems.Add(advisor.RecordType switch
-        {
-            "Investment Advisor Representative" => "IAR",
-            "Registered Representative" => "RR",
-            _ => advisor.RecordType ?? ""
-        });
-        item.SubItems.Add(advisor.YearsOfExperience.HasValue ? advisor.YearsOfExperience.Value.ToString() : "");
-        item.SubItems.Add(advisor.HasDisclosures ? $"Yes ({advisor.DisclosureCount})" : "No");
-        item.SubItems.Add(advisor.Source ?? "");
+            if (src is AdvisorCard clickedCard && clickedCard.Advisor != null)
+            {
+                foreach (Control c in _advisorCardPanel.Controls)
+                    if (c is AdvisorCard ac) ac.SetSelected(false);
 
-        if (advisor.IsExcluded)
-            item.ForeColor = Color.FromArgb(160, 160, 160);
-        else if (advisor.IsImportedToCrm)
-            item.ForeColor = Color.FromArgb(100, 60, 160);
-        else if (advisor.HasDisclosures)
-            item.ForeColor = Color.FromArgb(180, 80, 0);
-        else if (advisor.IsFavorited)
-            item.BackColor = Color.FromArgb(255, 252, 220);
+                clickedCard.SetSelected(true);
+                _selectedAdvisor = clickedCard.Advisor;
+            }
+        };
 
-        e.Item = item;
-    }
-
-    private void OnAdvisorListViewSelectionChanged(object? sender, EventArgs e)
-    {
-        if (_advisorListView.SelectedIndices.Count == 0) return;
-        int idx = _advisorListView.SelectedIndices[0];
-        if (idx < 0 || idx >= _currentAdvisors.Count) return;
-        _selectedAdvisor = _currentAdvisors[idx];
-        ShowAdvisorDetail(_selectedAdvisor.Id);
+        _advisorCardPanel.ContextMenuStrip = contextMenu;
+        _advisorCardPanel.Resize += (_, _) => ResizeAdvisorCards();
     }
 
     private ContextMenuStrip BuildCardContextMenu()
@@ -574,10 +529,60 @@ public class MainForm : Form
         return contextMenu;
     }
 
-    private void RenderAdvisorList()
+    private void RenderAdvisorCards()
     {
-        _advisorListView.VirtualListSize = 0;
-        _advisorListView.VirtualListSize = _currentAdvisors.Count;
+        _advisorCardPanel.SuspendLayout();
+
+        var oldControls = _advisorCardPanel.Controls.Cast<Control>().ToList();
+        _advisorCardPanel.Controls.Clear();
+        foreach (var c in oldControls)
+            c.Dispose();
+
+        var contextMenu = _advisorCardPanel.ContextMenuStrip!;
+        int cardHeight = 110;
+        int y = 6;
+        int cardWidth = Math.Max(50, _advisorCardPanel.ClientSize.Width - 12);
+
+        foreach (var advisor in _currentAdvisors)
+        {
+            var card = new AdvisorCard
+            {
+                Width = cardWidth,
+                Height = cardHeight,
+                Location = new Point(6, y),
+                ContextMenuStrip = contextMenu
+            };
+
+            // Propagate the context menu to child controls so right-click on labels works
+            foreach (Control child in card.Controls)
+                child.ContextMenuStrip = contextMenu;
+
+            card.SetAdvisor(advisor);
+
+            card.CardClicked += (_, _) =>
+            {
+                foreach (Control c in _advisorCardPanel.Controls)
+                    if (c is AdvisorCard ac) ac.SetSelected(false);
+
+                card.SetSelected(true);
+                _selectedAdvisor = card.Advisor;
+                ShowAdvisorDetail(card.Advisor!.Id);
+            };
+
+            _advisorCardPanel.Controls.Add(card);
+            y += cardHeight + 6;
+        }
+
+        _advisorCardPanel.ResumeLayout(true);
+    }
+
+    private void ResizeAdvisorCards()
+    {
+        int cardWidth = Math.Max(50, _advisorCardPanel.ClientSize.Width - 12);
+
+        foreach (Control c in _advisorCardPanel.Controls)
+            if (c is AdvisorCard card)
+                card.Width = cardWidth;
     }
 
     private void BuildFirmListView()
@@ -705,7 +710,7 @@ public class MainForm : Form
             _currentAdvisors = advisors;
             _totalAdvisorCount = total;
 
-            RenderAdvisorList();
+            RenderAdvisorCards();
             UpdateAdvisorCountLabel(filter);
             SetStatus("Ready");
         }
@@ -932,14 +937,24 @@ public class MainForm : Form
         var advisor = _repo.GetAdvisorById(id);
         if (advisor == null) return;
         _detailCard.ShowAdvisor(advisor);
+        var firm = !string.IsNullOrEmpty(advisor.CurrentFirmCrd)
+            ? _repo.GetFirmByCrd(advisor.CurrentFirmCrd)
+            : null;
+        _detailCard.SetFirm(firm);
 
         // Trigger a background detail fetch when the advisor is missing sub-collection data.
         // Bulk-imported advisors (SEC XML / FINRA bulk search) only carry summary fields;
         // employment history, registrations, qualifications, and disclosures only arrive via
         // the per-advisor detail endpoint. Fetch once per CRD per session.
         var crdNumber = advisor.CrdNumber;
+
+        bool alreadyTriggered = false;
+        if (!string.IsNullOrEmpty(crdNumber))
+            lock (_enrichmentTriggered)
+                alreadyTriggered = !_enrichmentTriggered.Add(crdNumber!);
+
         bool needsDisclosureEnrich = !string.IsNullOrEmpty(crdNumber)
-            && _enrichmentTriggered.Add(crdNumber!)
+            && !alreadyTriggered
             && (advisor.EmploymentHistory.Count == 0
                 || advisor.Registrations.Count == 0
                 || advisor.QualificationList.Count == 0
@@ -953,21 +968,23 @@ public class MainForm : Form
                 {
                     await _sync.RefreshAdvisorAsync(crdNumber!, null);
                 }
-                catch { /* non-critical background enrichment */ }
+                catch
+                {
+                    // Allow retry next time this advisor is selected
+                    lock (_enrichmentTriggered) { _enrichmentTriggered.Remove(crdNumber!); }
+                }
 
                 // Guard against the form being disposed while the background refresh ran.
                 try
                 {
                     if (!IsHandleCreated || IsDisposed) return;
-
-                    if (InvokeRequired)
-                        BeginInvoke(new Action(() =>
-                        {
-                            if (!IsHandleCreated || IsDisposed) return;
-                            if (_selectedAdvisor?.Id == id) ShowAdvisorDetail(id);
-                        }));
-                    else if (_selectedAdvisor?.Id == id)
-                        ShowAdvisorDetail(id);
+                    var action = new Action(() =>
+                    {
+                        if (!IsHandleCreated || IsDisposed) return;
+                        if (_selectedAdvisor?.Id == id) ShowAdvisorDetail(id);
+                    });
+                    if (InvokeRequired) BeginInvoke(action);
+                    else action();
                 }
                 catch (ObjectDisposedException) { }
                 catch (InvalidOperationException) { }
@@ -1313,6 +1330,10 @@ public class MainForm : Form
                 {
                     _selectedAdvisor = refreshed;
                     _detailCard.ShowAdvisor(refreshed);
+                    var refreshedFirm = !string.IsNullOrEmpty(refreshed.CurrentFirmCrd)
+                        ? _repo.GetFirmByCrd(refreshed.CurrentFirmCrd)
+                        : null;
+                    _detailCard.SetFirm(refreshedFirm);
                 }
             }
             else
@@ -1341,7 +1362,9 @@ public class MainForm : Form
 
         // Stop background refresh so it doesn't interfere while we wipe the DB.
         _bgData.StopBackgroundRefresh();
-        _advisorListView.VirtualListSize = 0;
+        var oldCards = _advisorCardPanel.Controls.Cast<Control>().ToList();
+        _advisorCardPanel.Controls.Clear();
+        foreach (var c in oldCards) c.Dispose();
         _currentAdvisors.Clear();
         _firmListView.Items.Clear();
         _selectedAdvisor = null;
@@ -1463,39 +1486,9 @@ public class MainForm : Form
 
     // ── Settings persistence ───────────────────────────────────────────
 
-    private static string SettingsPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "AdvisorLeads", "settings.txt");
+    private static void SaveSetting(string key, string value) => AppSettings.Save(key, value);
 
-    private static void SaveSetting(string key, string value)
-    {
-        try
-        {
-            var lines = File.Exists(SettingsPath)
-                ? File.ReadAllLines(SettingsPath).ToList()
-                : new List<string>();
-
-            var existing = lines.FindIndex(l => l.StartsWith(key + "="));
-            var newLine = $"{key}={value}";
-            if (existing >= 0) lines[existing] = newLine;
-            else lines.Add(newLine);
-
-            File.WriteAllLines(SettingsPath, lines);
-        }
-        catch { /* best effort */ }
-    }
-
-    private static string? LoadSetting(string key)
-    {
-        try
-        {
-            if (!File.Exists(SettingsPath)) return null;
-            var line = File.ReadAllLines(SettingsPath)
-                .FirstOrDefault(l => l.StartsWith(key + "="));
-            return line?.Substring(key.Length + 1);
-        }
-        catch { return null; }
-    }
+    private static string? LoadSetting(string key) => AppSettings.Load(key);
 
     private void OnExportAdvisors()
     {
@@ -1513,7 +1506,7 @@ public class MainForm : Form
             loadSetting: LoadSetting,
             saveSetting: SaveSetting,
             totalRecords: advisors.Count,
-            selectedCount: _advisorListView.SelectedIndices.Count,
+            selectedCount: _selectedAdvisor != null ? 1 : 0,
             entityType: "Advisor");
 
         // Wire preset selector to return live column lists for built-in presets
@@ -1524,12 +1517,9 @@ public class MainForm : Form
             .OrderBy(c => dlg.SelectedKeys.IndexOf(c.Key))
             .ToList();
 
-        var records = dlg.ExportAllRecords
+        var records = dlg.ExportAllRecords || _selectedAdvisor == null
             ? advisors
-            : _advisorListView.SelectedIndices.Cast<int>()
-                .Where(i => i >= 0 && i < advisors.Count)
-                .Select(i => advisors[i])
-                .ToList();
+            : new List<Advisor> { _selectedAdvisor };
 
         try
         {
@@ -1632,12 +1622,23 @@ public class MainForm : Form
 
     private void OnWatchToggleRequested(object? sender, Advisor advisor)
     {
-        _repo.SetAdvisorWatched(advisor.Id, advisor.IsWatched);
+        bool newState = !advisor.IsWatched;
+        _repo.SetAdvisorWatched(advisor.Id, newState);
+        LoadAdvisors();
+        if (_selectedAdvisor?.Id == advisor.Id)
+            ShowAdvisorDetail(advisor.Id);
+        SetStatus(newState
+            ? $"👁 {advisor.FullName} added to watch list."
+            : $"{advisor.FullName} removed from watch list.");
     }
 
     private void OnWatchFirmToggleRequested(object? sender, Firm firm)
     {
-        _repo.SetFirmWatched(firm.Id, firm.IsWatched);
+        bool newState = !firm.IsWatched;
+        _repo.SetFirmWatched(firm.Id, newState);
+        SetStatus(newState
+            ? $"👁 {firm.Name} added to watch list."
+            : $"{firm.Name} removed from watch list.");
     }
 
     private void PositionAlertsBadge()
