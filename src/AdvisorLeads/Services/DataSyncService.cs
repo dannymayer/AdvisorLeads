@@ -1,3 +1,4 @@
+using AdvisorLeads.Abstractions;
 using AdvisorLeads.Data;
 using AdvisorLeads.Models;
 
@@ -6,33 +7,30 @@ namespace AdvisorLeads.Services;
 /// <summary>
 /// Orchestrates fetching data from FINRA and SEC, merging duplicates, and persisting to database.
 /// </summary>
-public class DataSyncService
+public class DataSyncService : IDataSyncService
 {
-    private readonly FinraService _finra;
-    private readonly SecIapdService _sec;
-    private readonly AdvisorRepository _repo;
+    private readonly Dictionary<string, IAdvisorDataSource> _dataSources;
+    private readonly IAdvisorRepository _repo;
 
-    public DataSyncService(FinraService finra, SecIapdService sec, AdvisorRepository repo)
+    public DataSyncService(IEnumerable<IAdvisorDataSource> dataSources, IAdvisorRepository repo)
     {
-        _finra = finra;
-        _sec = sec;
+        _dataSources = dataSources.ToDictionary(s => s.SourceTag, StringComparer.OrdinalIgnoreCase);
         _repo = repo;
     }
 
     /// <summary>
     /// Searches both FINRA and SEC for the given query, merges results, and persists to the database.
-    /// Returns the list of merged/upserted advisors.
+    /// Returns a <see cref="SyncResult"/> with counts of new and updated records.
     /// </summary>
-    public async Task<List<Advisor>> FetchAndSyncAsync(string query, string? state = null,
+    public async Task<SyncResult> FetchAndSyncAsync(string query, string? state = null,
         bool includeFinra = true, bool includeSec = true,
         IProgress<string>? progress = null)
     {
         var allAdvisors = new Dictionary<string, Advisor>(StringComparer.OrdinalIgnoreCase);
 
-        // Fetch from FINRA
-        if (includeFinra)
+        if (includeFinra && _dataSources.TryGetValue("FINRA", out var finraSource))
         {
-            var finraResults = await _finra.SearchAdvisorsAsync(query, state, progress: progress);
+            var finraResults = await finraSource.SearchAsync(query, state, progress);
             foreach (var a in finraResults)
             {
                 var key = GetMergeKey(a);
@@ -43,10 +41,9 @@ public class DataSyncService
             }
         }
 
-        // Fetch from SEC
-        if (includeSec)
+        if (includeSec && _dataSources.TryGetValue("SEC", out var secSource))
         {
-            var secResults = await _sec.SearchAdvisorsAsync(query, state, progress: progress);
+            var secResults = await secSource.SearchAsync(query, state, progress);
             foreach (var a in secResults)
             {
                 var key = GetMergeKey(a);
@@ -60,30 +57,32 @@ public class DataSyncService
         progress?.Report($"Processing {allAdvisors.Count} unique advisors...");
 
         var results = new List<Advisor>();
+        int newCount = 0;
+        int updatedCount = 0;
+
         foreach (var advisor in allAdvisors.Values)
         {
-            // Fetch full details if we have a CRD
+            // Fetch full details if we have a CRD, dispatching to the advisor's primary source
             if (!string.IsNullOrEmpty(advisor.CrdNumber))
             {
-                Advisor? detail = null;
-                if (advisor.Source == "FINRA" || advisor.Source == "FINRA,SEC")
-                    detail = await _finra.GetAdvisorDetailAsync(advisor.CrdNumber, progress);
-                else if (advisor.Source == "SEC")
-                    detail = await _sec.GetAdvisorDetailAsync(advisor.CrdNumber, progress);
-
-                if (detail != null)
+                var primaryTag = advisor.Source?.Split(',')[0] ?? "FINRA";
+                if (_dataSources.TryGetValue(primaryTag, out var detailSource))
                 {
-                    MergeAdvisor(advisor, detail);
+                    var detail = await detailSource.GetDetailAsync(advisor.CrdNumber, progress);
+                    if (detail != null)
+                        MergeAdvisor(advisor, detail);
                 }
             }
 
-            // Upsert into database
-            _repo.UpsertAdvisor(advisor);
+            _repo.UpsertAdvisor(advisor, out bool wasNew);
             results.Add(advisor);
+
+            if (wasNew) newCount++;
+            else updatedCount++;
         }
 
-        progress?.Report($"Sync complete. {results.Count} advisors updated.");
-        return results;
+        progress?.Report($"Sync complete. {newCount} new, {updatedCount} updated.");
+        return new SyncResult(results, newCount, updatedCount);
     }
 
     /// <summary>
@@ -93,14 +92,16 @@ public class DataSyncService
     {
         progress?.Report($"Refreshing advisor CRD #{crd}...");
 
-        Advisor? finraDetail = await _finra.GetAdvisorDetailAsync(crd, progress);
-        Advisor? secDetail = await _sec.GetAdvisorDetailAsync(crd, progress);
-
-        Advisor? merged = finraDetail;
-        if (merged == null)
-            merged = secDetail;
-        else if (secDetail != null)
-            MergeAdvisor(merged, secDetail);
+        Advisor? merged = null;
+        foreach (var source in _dataSources.Values)
+        {
+            var detail = await source.GetDetailAsync(crd, progress);
+            if (detail != null)
+            {
+                if (merged == null) merged = detail;
+                else MergeAdvisor(merged, detail);
+            }
+        }
 
         if (merged != null)
         {
@@ -190,5 +191,24 @@ public class DataSyncService
                 target.QualificationList.Add(qual);
             }
         }
+
+        // Merge registrations
+        foreach (var reg in source.Registrations)
+        {
+            if (!target.Registrations.Any(r =>
+                string.Equals(r.StateCode, reg.StateCode, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(r.RegistrationCategory, reg.RegistrationCategory, StringComparison.OrdinalIgnoreCase)))
+            {
+                target.Registrations.Add(reg);
+            }
+        }
+
+        target.RegAuthorities ??= source.RegAuthorities;
     }
+}
+
+/// <summary>Result returned by <see cref="DataSyncService.FetchAndSyncAsync"/>.</summary>
+public record SyncResult(List<Advisor> Advisors, int NewCount, int UpdatedCount)
+{
+    public int Total => NewCount + UpdatedCount;
 }

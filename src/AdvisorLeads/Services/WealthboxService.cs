@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using AdvisorLeads.Abstractions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using AdvisorLeads.Models;
@@ -10,7 +11,7 @@ namespace AdvisorLeads.Services;
 /// Service for importing contacts into Wealthbox CRM.
 /// Wealthbox API docs: https://dev.wealthbox.com/
 /// </summary>
-public class WealthboxService
+public class WealthboxService : ICrmProvider
 {
     // Static shared client - auth token is passed per-request to support token changes.
     private static readonly HttpClient _http = new HttpClient

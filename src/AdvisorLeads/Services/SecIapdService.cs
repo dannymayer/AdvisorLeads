@@ -1,3 +1,4 @@
+using AdvisorLeads.Abstractions;
 using AdvisorLeads.Models;
 
 namespace AdvisorLeads.Services;
@@ -8,8 +9,10 @@ namespace AdvisorLeads.Services;
 /// and most reliable source for individual adviser data (including IA-registered reps).
 /// This service exists to satisfy the DataSyncService interface but returns empty results.
 /// </summary>
-public class SecIapdService
+public class SecIapdService : IAdvisorDataSource
 {
+    public string SourceTag => "SEC";
+
     public Task<List<Advisor>> SearchAdvisorsAsync(string query, string? state = null,
         int from = 0, int size = 12, IProgress<string>? progress = null)
     {
@@ -21,5 +24,13 @@ public class SecIapdService
     {
         return Task.FromResult<Advisor?>(null);
     }
+
+    // IAdvisorDataSource
+    Task<List<Advisor>> IAdvisorDataSource.SearchAsync(string query, string? state,
+        IProgress<string>? progress, CancellationToken token)
+        => SearchAdvisorsAsync(query, state, progress: progress);
+
+    Task<Advisor?> IAdvisorDataSource.GetDetailAsync(string crd, IProgress<string>? progress)
+        => GetAdvisorDetailAsync(crd, progress);
 }
 

@@ -1,5 +1,7 @@
+using AdvisorLeads.Abstractions;
 using AdvisorLeads.Data;
 using AdvisorLeads.Models;
+using AdvisorLeads.Services.RefreshSteps;
 
 namespace AdvisorLeads.Services;
 
@@ -9,29 +11,21 @@ namespace AdvisorLeads.Services;
 /// the local database. This is completely separate from the UI search/filter which queries
 /// the local DB only.
 /// </summary>
-public class BackgroundDataService
+public class BackgroundDataService : IBackgroundDataService
 {
-    private readonly FinraService _finra;
+    private readonly IFinraProvider _finra;
     private readonly SecCompilationService _sec;
-    private readonly AdvisorRepository _repo;
-    private SecMonthlyFirmService? _secMonthly;
-    private BrokerProtocolService? _brokerProtocol;
-    private SecIapdEnrichmentService? _secIapd;
-    private ChangeDetectionService? _changeDetection;
-    private AumAnalyticsService? _aumAnalytics;
-    private MaTargetScoringService? _maScoring;
-    private EdgarSubmissionsService? _edgarSubmissions;
-    private EdgarSearchService? _edgarSearch;
-    private FormAdvHistoricalService? _formAdvHistorical;
-    private SecBulkSubmissionsService? _secBulkSubmissions;
+    private readonly IAdvisorRepository _repo;
+    private readonly IEnumerable<IRefreshStep> _steps;
+    private readonly SecMonthlyFirmService _secMonthly;
+    private readonly ChangeDetectionService _changeDetection;
+    private readonly AumAnalyticsService _aumAnalytics;
+    private readonly SecIapdEnrichmentService _secIapd;
+    private readonly BrokerProtocolService _brokerProtocol;
+    private readonly EdgarSubmissionsService _edgarSubmissions;
+    private readonly EdgarSearchService _edgarSearch;
+    private readonly FormAdvHistoricalService _formAdvHistorical;
     private WatchListMonitorService? _watchListMonitor;
-    private AumThresholdAlertService? _aumThresholdAlerts;
-    private BrokerProtocolAlertService? _brokerProtocolAlerts;
-    private MarketWatchService? _marketWatch;
-    private FinraSanctionService? _finraSanction;
-    private SecEnforcementService? _secEnforcement;
-    private CourtListenerService? _courtListener;
-    private FormAdvDeepEnrichmentService? _formAdvDeep;
     private Func<string, string?>? _loadSetting;
     private Action<string, string>? _saveSetting;
     private CancellationTokenSource? _cts;
@@ -43,39 +37,35 @@ public class BackgroundDataService
     /// <summary>Raised when new alerts are generated during a refresh cycle. Carries the count of new alerts.</summary>
     public event Action<int>? AlertsGenerated;
 
-    public BackgroundDataService(FinraService finra, SecCompilationService sec, AdvisorRepository repo)
+    public BackgroundDataService(
+        IFinraProvider finra,
+        SecCompilationService sec,
+        IAdvisorRepository repo,
+        IEnumerable<IRefreshStep> steps,
+        SecMonthlyFirmService secMonthly,
+        ChangeDetectionService changeDetection,
+        AumAnalyticsService aumAnalytics,
+        SecIapdEnrichmentService secIapd,
+        BrokerProtocolService brokerProtocol,
+        EdgarSubmissionsService edgarSubmissions,
+        EdgarSearchService edgarSearch,
+        FormAdvHistoricalService formAdvHistorical)
     {
         _finra = finra;
         _sec = sec;
         _repo = repo;
+        _steps = steps;
+        _secMonthly = secMonthly;
+        _changeDetection = changeDetection;
+        _aumAnalytics = aumAnalytics;
+        _secIapd = secIapd;
+        _brokerProtocol = brokerProtocol;
+        _edgarSubmissions = edgarSubmissions;
+        _edgarSearch = edgarSearch;
+        _formAdvHistorical = formAdvHistorical;
     }
 
-    public void SetSecMonthlyService(SecMonthlyFirmService s) => _secMonthly = s;
-    public void SetBrokerProtocolService(BrokerProtocolService s) => _brokerProtocol = s;
-    public void SetIapdService(SecIapdEnrichmentService s) => _secIapd = s;
-    public void SetChangeDetectionService(ChangeDetectionService s) => _changeDetection = s;
-    public void SetAumAnalyticsService(AumAnalyticsService s) => _aumAnalytics = s;
-    public void SetMaScoringService(MaTargetScoringService s) => _maScoring = s;
-    public void SetEdgarSubmissionsService(EdgarSubmissionsService s) => _edgarSubmissions = s;
-    public void SetEdgarSearchService(EdgarSearchService s) => _edgarSearch = s;
-    public void SetFormAdvHistoricalService(FormAdvHistoricalService s) => _formAdvHistorical = s;
-    public void SetSecBulkSubmissionsService(SecBulkSubmissionsService s) => _secBulkSubmissions = s;
     public void SetWatchListMonitorService(WatchListMonitorService s) => _watchListMonitor = s;
-    public void SetAumThresholdAlertService(AumThresholdAlertService s) => _aumThresholdAlerts = s;
-    public void SetBrokerProtocolAlertService(BrokerProtocolAlertService s) => _brokerProtocolAlerts = s;
-    public void SetMarketWatchService(MarketWatchService s) => _marketWatch = s;
-
-    private DisclosureScoringService? _disclosureScorer;
-    private MobilityScoreService? _mobilityScorer;
-    private CompetitiveIntelligenceService? _competitiveIntel;
-
-    public void SetDisclosureScoringService(DisclosureScoringService s) => _disclosureScorer = s;
-    public void SetMobilityScoreService(MobilityScoreService s) => _mobilityScorer = s;
-    public void SetCompetitiveIntelligenceService(CompetitiveIntelligenceService s) => _competitiveIntel = s;
-    public void SetFinraSanctionService(FinraSanctionService s) => _finraSanction = s;
-    public void SetSecEnforcementService(SecEnforcementService s) => _secEnforcement = s;
-    public void SetCourtListenerService(CourtListenerService s) => _courtListener = s;
-    public void SetFormAdvDeepEnrichmentService(FormAdvDeepEnrichmentService s) => _formAdvDeep = s;
 
     public void SetSettingAccessors(Func<string, string?> load, Action<string, string> save)
     {
@@ -240,39 +230,6 @@ public class BackgroundDataService
         }
         catch { /* continue on error */ }
 
-        // SEC Monthly firm CSV — run change detection + AUM snapshot before upsert
-        try
-        {
-            if (_secMonthly != null)
-            {
-                var latestUrl = await _secMonthly.GetLatestRegisteredAdvisersUrlAsync(token);
-                if (latestUrl != null)
-                {
-                    var firms = await _secMonthly.DownloadAndParseFirmsAsync(latestUrl, progress, token);
-                    if (firms.Count > 0)
-                    {
-                        if (_changeDetection != null)
-                        {
-                            var eventCount = _changeDetection.DetectChanges(firms, progress);
-                            if (eventCount > 0)
-                                progress.Report($"✓ Detected {eventCount} significant firm changes.");
-                        }
-
-                        _repo.UpsertFirmBatch(firms, progress);
-
-                        if (_aumAnalytics != null)
-                        {
-                            var snapshotCount = _aumAnalytics.SnapshotFirmData(firms, DateTime.Now);
-                            if (snapshotCount > 0)
-                                progress.Report($"✓ Recorded {snapshotCount:N0} AUM snapshots.");
-                        }
-                    }
-                }
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { /* continue on error */ }
-
         // Enrich advisors with full detail (employment history, exams, registered states)
         try
         {
@@ -284,195 +241,21 @@ public class BackgroundDataService
         catch (OperationCanceledException) { throw; }
         catch { /* continue on error */ }
 
-        // SEC IAPD enrichment for advisors missing employment/qualification data
-        try
+        // Analytics and data enrichment steps (ordered pipeline, phase 1)
+        foreach (var step in _steps.Where(s => s.OrderIndex < 200).OrderBy(s => s.OrderIndex))
         {
-            if (_secIapd != null)
-            {
-                var iapdCount = await _secIapd.EnrichBatchAsync(progress, token, activeOnly ? 200 : 100);
-                if (iapdCount > 0)
-                    progress.Report($"✓ Enriched {iapdCount} advisors via SEC IAPD.");
-            }
+            await step.ExecuteAsync(progress, token);
         }
-        catch (OperationCanceledException) { throw; }
-        catch { /* continue on error */ }
-
-        // Fetch EDGAR filing history for firms with SEC numbers
-        try
-        {
-            if (_edgarSubmissions != null)
-            {
-                var filingCount = await _edgarSubmissions.FetchFilingsBatchAsync(
-                    activeOnly ? 50 : 25, progress, token);
-                if (filingCount > 0)
-                    progress.Report($"✓ Fetched {filingCount} new EDGAR filings.");
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { /* continue on error */ }
-
-        // EDGAR full-text M&A keyword search scan
-        try
-        {
-            if (_edgarSearch != null)
-            {
-                var searchCount = await _edgarSearch.RunMaSearchScanAsync(progress, token);
-                if (searchCount > 0)
-                    progress.Report($"✓ Found {searchCount} EDGAR M&A keyword matches.");
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { /* continue on error */ }
-
-        // Form ADV historical data — quarterly import
-        try
-        {
-            if (_formAdvHistorical != null && _loadSetting != null && _saveSetting != null)
-            {
-                await RunFormAdvHistoricalImportAsync(_loadSetting, _saveSetting, progress, token);
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { /* non-critical */ }
-
-        // Broker Protocol weekly update
-        try
-        {
-            if (_brokerProtocol != null)
-            {
-                var names = await _brokerProtocol.FetchMemberNamesAsync(token);
-                if (names.Count >= 5)
-                {
-                    HashSet<string>? previousMemberCrds = null;
-                    if (_brokerProtocolAlerts != null)
-                        previousMemberCrds = _repo.GetBrokerProtocolMemberCrds();
-
-                    var updated = _repo.UpdateBrokerProtocolStatus(names, DateTime.UtcNow);
-
-                    if (_brokerProtocolAlerts != null && previousMemberCrds != null)
-                    {
-                        try
-                        {
-                            var currentMemberCrds = _repo.GetBrokerProtocolMemberCrds();
-                            int bpAlertCount = _brokerProtocolAlerts.DetectAndRecordChanges(
-                                previousMemberCrds, currentMemberCrds, progress);
-                            if (bpAlertCount > 0)
-                                AlertsGenerated?.Invoke(bpAlertCount);
-                        }
-                        catch { /* continue on error */ }
-                    }
-
-                    if (updated > 0)
-                        progress.Report($"✓ Marked {updated} firms as Broker Protocol members.");
-                }
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { /* continue on error */ }
-
-        // SEC bulk submissions enrichment — runs once per day (cache guards against repeat downloads)
-        try
-        {
-            if (_secBulkSubmissions != null && !_secBulkSubmissions.IsCacheValid())
-            {
-                var enriched = await _secBulkSubmissions.SyncFirmMetadataAsync(progress, token);
-                if (enriched > 0)
-                    progress.Report($"✓ Enriched {enriched} firms with EDGAR SIC/metadata.");
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { /* continue on error */ }
-
-        // AUM threshold alert check — runs after AUM snapshot is recorded
-        try
-        {
-            if (_aumThresholdAlerts != null)
-            {
-                int alertCount = await _aumThresholdAlerts.CheckAumThresholdsAsync(progress);
-                if (alertCount > 0)
-                    AlertsGenerated?.Invoke(alertCount);
-            }
-        }
-        catch { /* continue on error */ }
-
-        // Market Watch new-registrant check — runs last, after all data is upserted
-        try
-        {
-            if (_marketWatch != null)
-            {
-                var since = DateTime.UtcNow.AddHours(-25);
-                int alertCount = _marketWatch.CheckNewRegistrations(since, progress);
-                if (alertCount > 0)
-                    AlertsGenerated?.Invoke(alertCount);
-            }
-        }
-        catch { /* continue on error */ }
-
-        // Analytics scoring — runs after all data is up to date
-        try
-        {
-            if (_disclosureScorer != null)
-            {
-                await _disclosureScorer.RefreshAllScoresAsync(progress, token);
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { progress.Report($"⚠ Disclosure scoring error: {ex.Message}"); }
-
-        try
-        {
-            if (_mobilityScorer != null)
-            {
-                await _mobilityScorer.RefreshAllScoresAsync(progress, token);
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { progress.Report($"⚠ Mobility scoring error: {ex.Message}"); }
-
-        try
-        {
-            if (_competitiveIntel != null)
-            {
-                await _competitiveIntel.RefreshHeadcountDeltasAsync(progress);
-            }
-        }
-        catch (Exception ex) { progress.Report($"⚠ Competitive intelligence error: {ex.Message}"); }
 
         _repo.ResolveAdvisorFirmLinks();
         _repo.UpdateFirmAdvisorCounts();
         _repo.ClassifyRegistrationLevels();
 
-        try
+        // Post-processing enrichment steps (phase 2, after repo maintenance)
+        foreach (var step in _steps.Where(s => s.OrderIndex >= 200).OrderBy(s => s.OrderIndex))
         {
-            if (_finraSanction != null)
-                await _finraSanction.EnrichBatchAsync(progress: progress, ct: token);
+            await step.ExecuteAsync(progress, token);
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { progress.Report($"⚠ FINRA sanction enrichment error: {ex.Message}"); }
-
-        try
-        {
-            if (_secEnforcement != null)
-                await _secEnforcement.EnrichBatchAsync(progress: progress, ct: token);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { progress.Report($"⚠ SEC enforcement enrichment error: {ex.Message}"); }
-
-        try
-        {
-            if (_courtListener != null)
-                await _courtListener.EnrichBatchAsync(progress: progress, ct: token);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { progress.Report($"⚠ CourtListener enrichment error: {ex.Message}"); }
-
-        try
-        {
-            if (_formAdvDeep != null)
-                await _formAdvDeep.EnrichBatchAsync(progress: progress, ct: token);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { progress.Report($"⚠ Form ADV deep enrichment error: {ex.Message}"); }
 
         DataUpdated?.Invoke();
     }
@@ -548,7 +331,7 @@ public class BackgroundDataService
 
         progress?.Report($"SEC Monthly: Checking for new firm data (last update: {lastUpdated ?? "never"})...");
 
-        var latestUrl = await _secMonthly.GetLatestRegisteredAdvisersUrlAsync(ct);
+        var latestUrl = await _secMonthly.GetLatestRegisteredAdvisersUrlAsync(progress, ct);
         if (latestUrl == null)
         {
             progress?.Report("SEC Monthly: Could not find latest file URL.");

@@ -523,6 +523,9 @@ public class SecCompilationService
                 ? $"https://brokercheck.finra.org/individual/summary/{advisor.CrdNumber}"
                 : null;
             advisor.BcDisclosureCount = advisor.Disclosures.Count;
+            // All individuals in the SEC IAPD compilation are active IARs
+            advisor.IaScope = "Active";
+            advisor.RegistrationLevel = "Federal";
 
             if (string.IsNullOrWhiteSpace(advisor.CrdNumber) ||
                 (string.IsNullOrWhiteSpace(advisor.FirstName) && string.IsNullOrWhiteSpace(advisor.LastName)))
@@ -598,7 +601,7 @@ public class SecCompilationService
             var firm = new Firm
             {
                 Source = "SEC",
-                RecordType = "Investment Advisor",
+                RecordType = "Investment Adviser",
                 IsRegisteredWithSec = true,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow

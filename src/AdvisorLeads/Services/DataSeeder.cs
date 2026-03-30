@@ -1,3 +1,4 @@
+using AdvisorLeads.Abstractions;
 using AdvisorLeads.Data;
 using AdvisorLeads.Models;
 
@@ -5,9 +6,9 @@ namespace AdvisorLeads.Services;
 
 public class DataSeeder
 {
-    private readonly AdvisorRepository _repo;
+    private readonly IAdvisorRepository _repo;
 
-    public DataSeeder(AdvisorRepository repo)
+    public DataSeeder(IAdvisorRepository repo)
     {
         _repo = repo;
     }

@@ -37,15 +37,20 @@ public class BrokerProtocolService
         catch { return new List<string>(); }
     }
 
-    private static List<string> ParseMemberNames(string html)
+    /// <summary>
+    /// Parses broker protocol member firm names from raw HTML.
+    /// Public for unit-test access; the page format may vary, so multiple
+    /// extraction strategies are tried in order of reliability.
+    /// </summary>
+    public static List<string> ParseMemberNames(string html)
     {
         var names = new List<string>();
 
-        // The J.S. Held page renders the list as an HTML table or list.
-        // Try to find table rows with firm names first.
+        // Strategy 1: HTML table cells — most structured form.
+        // Threshold of 5 prevents tiny unrelated tables from triggering this path.
         var tableMatches = Regex.Matches(html, @"<td[^>]*>\s*([A-Za-z][^<]{2,100}?)\s*</td>",
             RegexOptions.IgnoreCase);
-        if (tableMatches.Count > 20)
+        if (tableMatches.Count > 5)
         {
             foreach (Match m in tableMatches)
             {
@@ -55,12 +60,38 @@ public class BrokerProtocolService
             }
         }
 
-        // Fallback: extract from <li> tags inside a section about broker protocol members
+        // Strategy 2: <li> list items
         if (names.Count < 10)
         {
             var liMatches = Regex.Matches(html, @"<li[^>]*>\s*([A-Za-z][^<]{2,100}?)\s*</li>",
                 RegexOptions.IgnoreCase);
             foreach (Match m in liMatches)
+            {
+                var text = StripTags(m.Groups[1].Value).Trim();
+                if (IsValidFirmName(text))
+                    names.Add(text);
+            }
+        }
+
+        // Strategy 3: <p> paragraph tags (some CMS renderings)
+        if (names.Count < 10)
+        {
+            var pMatches = Regex.Matches(html, @"<p[^>]*>\s*([A-Za-z][^<]{2,100}?)\s*</p>",
+                RegexOptions.IgnoreCase);
+            foreach (Match m in pMatches)
+            {
+                var text = StripTags(m.Groups[1].Value).Trim();
+                if (IsValidFirmName(text))
+                    names.Add(text);
+            }
+        }
+
+        // Strategy 4: <div> tags with short, name-like text content
+        if (names.Count < 10)
+        {
+            var divMatches = Regex.Matches(html, @"<div[^>]*>\s*([A-Za-z][^<]{2,100}?)\s*</div>",
+                RegexOptions.IgnoreCase);
+            foreach (Match m in divMatches)
             {
                 var text = StripTags(m.Groups[1].Value).Trim();
                 if (IsValidFirmName(text))
@@ -80,8 +111,14 @@ public class BrokerProtocolService
     private static bool IsValidFirmName(string s)
     {
         if (s.Length < 3 || s.Length > 120) return false;
-        // Skip things that look like headers, dates, or navigation text
         if (Regex.IsMatch(s, @"^\d+$")) return false;
+
+        // Skip navigation, footer, and boilerplate content
+        if (s.Contains("J.S. Held", StringComparison.OrdinalIgnoreCase)) return false;
+        if (s.Contains("Copyright", StringComparison.OrdinalIgnoreCase)) return false;
+        if (s.Contains("Contact", StringComparison.OrdinalIgnoreCase)) return false;
+        if (s.Contains("Privacy", StringComparison.OrdinalIgnoreCase)) return false;
+        if (s.Contains("Terms", StringComparison.OrdinalIgnoreCase)) return false;
         if (s.Contains("click here", StringComparison.OrdinalIgnoreCase)) return false;
         if (s.Contains("download", StringComparison.OrdinalIgnoreCase)) return false;
         if (s.Contains("©")) return false;

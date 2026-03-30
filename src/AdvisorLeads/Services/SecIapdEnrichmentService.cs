@@ -1,3 +1,4 @@
+using AdvisorLeads.Abstractions;
 using AdvisorLeads.Data;
 using AdvisorLeads.Models;
 using Newtonsoft.Json.Linq;
@@ -14,7 +15,7 @@ namespace AdvisorLeads.Services;
 /// </summary>
 public class SecIapdEnrichmentService
 {
-    private readonly AdvisorRepository _repo;
+    private readonly IAdvisorRepository _repo;
     private static readonly HttpClient _http = new HttpClient
     {
         Timeout = TimeSpan.FromSeconds(30),
@@ -28,7 +29,7 @@ public class SecIapdEnrichmentService
         _http.DefaultRequestHeaders.Add("Accept", "application/json");
     }
 
-    public SecIapdEnrichmentService(AdvisorRepository repo)
+    public SecIapdEnrichmentService(IAdvisorRepository repo)
     {
         _repo = repo;
     }
