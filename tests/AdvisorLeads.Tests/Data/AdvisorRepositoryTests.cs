@@ -692,6 +692,86 @@ public class AdvisorRepositoryTests : IDisposable
         Assert.Equal("DT03", results[0].CrdNumber);
     }
 
+    // ── NULL YearsOfExperience regression tests ─────────────────────────
+
+    [Fact]
+    public void GetAdvisors_MinYearsExperience_IncludesRecordsWithNullYears()
+    {
+        var veteran = MakeAdvisor("NYE01", "Veteran", "Advisor");
+        veteran.YearsOfExperience = 15;
+        _repo.UpsertAdvisor(veteran);
+
+        var unknown = MakeAdvisor("NYE02", "Unknown", "Experience");
+        // YearsOfExperience intentionally left null — simulates SEC-sourced record
+        _repo.UpsertAdvisor(unknown);
+
+        var filter = new SearchFilter { MinYearsExperience = 5, PageSize = 100 };
+        var results = _repo.GetAdvisors(filter);
+
+        Assert.Contains(results, a => a.CrdNumber == "NYE01");
+        Assert.Contains(results, a => a.CrdNumber == "NYE02");
+    }
+
+    [Fact]
+    public void GetAdvisors_MaxYearsExperience_IncludesRecordsWithNullYears()
+    {
+        var junior = MakeAdvisor("NYE03", "Junior", "Advisor");
+        junior.YearsOfExperience = 3;
+        _repo.UpsertAdvisor(junior);
+
+        var senior = MakeAdvisor("NYE04", "Senior", "Advisor");
+        senior.YearsOfExperience = 30;
+        _repo.UpsertAdvisor(senior);
+
+        var unknown = MakeAdvisor("NYE05", "Unknown", "Experience");
+        _repo.UpsertAdvisor(unknown);
+
+        var filter = new SearchFilter { MaxYearsExperience = 10, PageSize = 100 };
+        var results = _repo.GetAdvisors(filter);
+
+        Assert.Contains(results, a => a.CrdNumber == "NYE03");
+        Assert.DoesNotContain(results, a => a.CrdNumber == "NYE04");
+        Assert.Contains(results, a => a.CrdNumber == "NYE05");
+    }
+
+    [Fact]
+    public void GetAdvisors_NameSearch_CaseInsensitive_ReturnsMatchingRecord()
+    {
+        _repo.UpsertAdvisor(MakeAdvisor("CI01", "John", "Schlesser"));
+        _repo.UpsertAdvisor(MakeAdvisor("CI02", "Jane", "Smith"));
+
+        var lower = _repo.GetAdvisors(new SearchFilter { NameQuery = "schlesser", PageSize = 100 });
+        var upper = _repo.GetAdvisors(new SearchFilter { NameQuery = "SCHLESSER", PageSize = 100 });
+        var mixed = _repo.GetAdvisors(new SearchFilter { NameQuery = "Schlesser", PageSize = 100 });
+
+        Assert.Single(lower);
+        Assert.Single(upper);
+        Assert.Single(mixed);
+        Assert.Equal("CI01", lower[0].CrdNumber);
+    }
+
+    [Fact]
+    public void GetAdvisors_NameSearch_WithActiveYearsFilter_ReturnsNullYearsRecord()
+    {
+        // Reproduces the "Schlesser" scenario: record exists in DB with NULL YearsOfExperience
+        // but was invisible when any years experience filter was active.
+        var advisor = MakeAdvisor("SCHL01", "Karl", "Schlesser");
+        // YearsOfExperience left null — common for SEC-sourced IAR records
+        _repo.UpsertAdvisor(advisor);
+
+        var filter = new SearchFilter
+        {
+            NameQuery = "Schlesser",
+            MinYearsExperience = 1,
+            MaxYearsExperience = 30,
+            PageSize = 100
+        };
+        var results = _repo.GetAdvisors(filter);
+
+        Assert.Single(results);
+        Assert.Equal("SCHL01", results[0].CrdNumber);
+    }
+
     private static Advisor MakeAdvisor(string crd, string first, string last, string? state = null)
     {
         return new Advisor
@@ -703,5 +783,208 @@ public class AdvisorRepositoryTests : IDisposable
             Source = "FINRA",
             RecordType = "Registered Representative"
         };
+    }
+
+    // ── ResolveAdvisorFirmLinks ────────────────────────────────────────
+
+    [Fact]
+    public void ResolveAdvisorFirmLinks_PopulatesCurrentFirmId()
+    {
+        var firm = new Firm { CrdNumber = "F1001", Name = "Acme Advisors", Source = "SEC" };
+        _repo.UpsertFirm(firm);
+        var savedFirm = _repo.GetFirms(new FirmSearchFilter { NameQuery = "Acme Advisors" }).First();
+
+        var advisor = MakeAdvisor("A1001", "Jane", "Smith");
+        advisor.CurrentFirmCrd = "F1001";
+        _repo.UpsertAdvisor(advisor);
+
+        _repo.ResolveAdvisorFirmLinks();
+
+        var loaded = _repo.GetAdvisorByCrd("A1001");
+        Assert.NotNull(loaded);
+        Assert.Equal(savedFirm.Id, loaded!.CurrentFirmId);
+    }
+
+    [Fact]
+    public void ResolveAdvisorFirmLinks_CorrectsMislinkedAdvisors()
+    {
+        var firmA = new Firm { CrdNumber = "F2001", Name = "Beta Wealth", Source = "SEC" };
+        var firmB = new Firm { CrdNumber = "F2002", Name = "Gamma Capital", Source = "SEC" };
+        _repo.UpsertFirm(firmA);
+        _repo.UpsertFirm(firmB);
+        var savedA = _repo.GetFirms(new FirmSearchFilter { NameQuery = "Beta Wealth" }).First();
+
+        // Advisor's CRD points to firmA but was previously linked to firmB (wrong link)
+        var advisor = MakeAdvisor("A2001", "John", "Doe");
+        advisor.CurrentFirmCrd = "F2001";
+        advisor.CurrentFirmId = _repo.GetFirms(new FirmSearchFilter { NameQuery = "Gamma Capital" }).First().Id;
+        _repo.UpsertAdvisor(advisor);
+
+        _repo.ResolveAdvisorFirmLinks();
+
+        var loaded = _repo.GetAdvisorByCrd("A2001");
+        Assert.NotNull(loaded);
+        // The wrong link should be corrected to the firm that matches CurrentFirmCrd
+        Assert.Equal(savedA.Id, loaded!.CurrentFirmId);
+    }
+
+    [Fact]
+    public void ResolveAdvisorFirmLinks_IgnoresUnmatchedCrd()
+    {
+        var advisor = MakeAdvisor("A3001", "Carol", "King");
+        advisor.CurrentFirmCrd = "NOMATCH";
+        _repo.UpsertAdvisor(advisor);
+
+        _repo.ResolveAdvisorFirmLinks();
+
+        var loaded = _repo.GetAdvisorByCrd("A3001");
+        Assert.NotNull(loaded);
+        Assert.Null(loaded!.CurrentFirmId);
+    }
+
+    // ── UpdateBrokerProtocolStatus ────────────────────────────────────
+
+    [Fact]
+    public void AdvisorRepository_UpdateBrokerProtocolStatus_MatchesFirmByName()
+    {
+        // Seed a firm
+        var firm = new Firm
+        {
+            CrdNumber = "BP001",
+            Name = "Fidelity Investments",
+            Source = "SEC"
+        };
+        _repo.UpsertFirm(firm);
+
+        // Act
+        var matched = _repo.UpdateBrokerProtocolStatus(
+            new List<string> { "Fidelity Investments" }, DateTime.UtcNow);
+
+        // Assert
+        Assert.Equal(1, matched);
+        var updated = _repo.GetFirms(new FirmSearchFilter { NameQuery = "Fidelity Investments" });
+        Assert.Single(updated);
+        Assert.True(updated[0].BrokerProtocolMember);
+        Assert.NotNull(updated[0].BrokerProtocolUpdatedAt);
+    }
+
+    [Fact]
+    public void AdvisorRepository_UpdateBrokerProtocolStatus_NormalizesSuffixes()
+    {
+        // Seed firm with full legal name including suffixes
+        var firm = new Firm
+        {
+            CrdNumber = "BP002",
+            Name = "Merrill Lynch & Co., Inc.",
+            Source = "SEC"
+        };
+        _repo.UpsertFirm(firm);
+
+        // Provide the simplified name (no suffixes, & replaced by and)
+        var matched = _repo.UpdateBrokerProtocolStatus(
+            new List<string> { "Merrill Lynch" }, DateTime.UtcNow);
+
+        Assert.Equal(1, matched);
+        var updated = _repo.GetFirms(new FirmSearchFilter { NameQuery = "Merrill Lynch" });
+        Assert.Single(updated);
+        Assert.True(updated[0].BrokerProtocolMember);
+    }
+
+    [Fact]
+    public void AdvisorRepository_UpdateBrokerProtocolStatus_ClearsOldMemberships()
+    {
+        // Seed two firms; initially set both as members via a direct upsert
+        var firmA = new Firm { CrdNumber = "BPC01", Name = "Alpha Advisors", Source = "SEC", BrokerProtocolMember = true };
+        var firmB = new Firm { CrdNumber = "BPC02", Name = "Beta Wealth Management", Source = "SEC", BrokerProtocolMember = true };
+        _repo.UpsertFirm(firmA);
+        _repo.UpsertFirm(firmB);
+
+        // Update: only Alpha is now a member
+        _repo.UpdateBrokerProtocolStatus(new List<string> { "Alpha Advisors" }, DateTime.UtcNow);
+
+        var firms = _repo.GetFirms(new FirmSearchFilter { PageSize = 100 });
+        var alpha = firms.First(f => f.CrdNumber == "BPC01");
+        var beta = firms.First(f => f.CrdNumber == "BPC02");
+
+        Assert.True(alpha.BrokerProtocolMember);
+        Assert.False(beta.BrokerProtocolMember);
+    }
+
+    [Fact]
+    public void AdvisorRepository_UpdateBrokerProtocolStatus_MatchesByLegalName()
+    {
+        var firm = new Firm
+        {
+            CrdNumber = "BP003",
+            Name = "MLFP",
+            LegalName = "Merrill Lynch Financial Products",
+            Source = "SEC"
+        };
+        _repo.UpsertFirm(firm);
+
+        var matched = _repo.UpdateBrokerProtocolStatus(
+            new List<string> { "Merrill Lynch Financial Products" }, DateTime.UtcNow);
+
+        Assert.Equal(1, matched);
+        var updated = _repo.GetFirms(new FirmSearchFilter { NameQuery = "MLFP" });
+        Assert.Single(updated);
+        Assert.True(updated[0].BrokerProtocolMember);
+    }
+
+    // ── UpdateFirmAdvisorCounts ────────────────────────────────────────
+
+    [Fact]
+    public void UpdateFirmAdvisorCounts_SetsCountFromLinkedAdvisors()
+    {
+        var firm = new Firm { CrdNumber = "UFC01", Name = "Count Test Firm", Source = "SEC" };
+        _repo.UpsertFirm(firm);
+
+        var a1 = MakeAdvisor("UFCA1", "Alice", "Adams");
+        a1.CurrentFirmCrd = "UFC01";
+        var a2 = MakeAdvisor("UFCA2", "Bob", "Baker");
+        a2.CurrentFirmCrd = "UFC01";
+        _repo.UpsertAdvisor(a1);
+        _repo.UpsertAdvisor(a2);
+
+        _repo.UpdateFirmAdvisorCounts();
+
+        var updated = _repo.GetFirms(new FirmSearchFilter { NameQuery = "Count Test Firm" }).First();
+        Assert.Equal(2, updated.NumberOfAdvisors);
+    }
+
+    [Fact]
+    public void UpdateFirmAdvisorCounts_ExcludesExcludedAdvisors()
+    {
+        var firm = new Firm { CrdNumber = "UFC02", Name = "Exclude Test Firm", Source = "SEC" };
+        _repo.UpsertFirm(firm);
+
+        var active = MakeAdvisor("UFCB1", "Carol", "Clark");
+        active.CurrentFirmCrd = "UFC02";
+        var excluded = MakeAdvisor("UFCB2", "Dan", "Davis");
+        excluded.CurrentFirmCrd = "UFC02";
+        _repo.UpsertAdvisor(active);
+        _repo.UpsertAdvisor(excluded);
+
+        // Exclude the second advisor after insert (InsertAdvisor resets IsExcluded)
+        var excludedRecord = _repo.GetAdvisorByCrd("UFCB2");
+        Assert.NotNull(excludedRecord);
+        _repo.SetAdvisorExcluded(excludedRecord!.Id, true);
+
+        _repo.UpdateFirmAdvisorCounts();
+
+        var updated = _repo.GetFirms(new FirmSearchFilter { NameQuery = "Exclude Test Firm" }).First();
+        Assert.Equal(1, updated.NumberOfAdvisors);
+    }
+
+    [Fact]
+    public void UpdateFirmAdvisorCounts_ReturnsZeroForFirmWithNoAdvisors()
+    {
+        var firm = new Firm { CrdNumber = "UFC03", Name = "Empty Firm", Source = "SEC", NumberOfAdvisors = 99 };
+        _repo.UpsertFirm(firm);
+
+        _repo.UpdateFirmAdvisorCounts();
+
+        var updated = _repo.GetFirms(new FirmSearchFilter { NameQuery = "Empty Firm" }).First();
+        Assert.Equal(0, updated.NumberOfAdvisors);
     }
 }

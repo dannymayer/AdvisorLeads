@@ -310,6 +310,71 @@ public class DatabaseContextTests : IDisposable
         return cols;
     }
 
+    [Fact]
+    public void InitializeDatabase_CreatesMigrationHistoryTable()
+    {
+        using var ctx = new DatabaseContext(_dbPath);
+        ctx.InitializeDatabase();
+
+        var conn = ctx.Database.GetDbConnection();
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM \"__EFMigrationsHistory\"";
+        var count = Convert.ToInt32(cmd.ExecuteScalar());
+
+        Assert.True(count >= 1, "__EFMigrationsHistory should have at least one row after InitializeDatabase");
+    }
+
+    [Fact]
+    public void InitializeDatabase_AdvisorsTableAccessible_AfterMigrate()
+    {
+        using var ctx = new DatabaseContext(_dbPath);
+        ctx.InitializeDatabase();
+
+        // Should return 0 without throwing — confirms Advisors table was created by Migrate()
+        var count = ctx.Advisors.Count();
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
+    public void StampBaseline_ExistingDatabaseWithoutHistory_GetsStamped()
+    {
+        // Simulate a pre-migration production database: create tables manually, no migration history
+        using (var ctx = new DatabaseContext(_dbPath))
+        {
+            // EnsureCreated() builds the schema without __EFMigrationsHistory
+            ctx.Database.EnsureCreated();
+        }
+
+        // Verify __EFMigrationsHistory does NOT exist yet
+        using (var ctx = new DatabaseContext(_dbPath))
+        {
+            var conn = ctx.Database.GetDbConnection();
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name='__EFMigrationsHistory'";
+            var tableCount = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Equal(0, tableCount);
+        }
+
+        // Now call InitializeDatabase() — StampBaselineIfNeeded should stamp it
+        using (var ctx = new DatabaseContext(_dbPath))
+        {
+            ctx.InitializeDatabase();
+        }
+
+        // Verify the baseline was stamped and data is intact
+        using (var ctx = new DatabaseContext(_dbPath))
+        {
+            var conn = ctx.Database.GetDbConnection();
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM \"__EFMigrationsHistory\"";
+            var historyCount = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.True(historyCount >= 1, "Baseline should be stamped into __EFMigrationsHistory");
+        }
+    }
+
     private static List<string> GetIndexNames(DatabaseContext ctx)
     {
         var indices = new List<string>();

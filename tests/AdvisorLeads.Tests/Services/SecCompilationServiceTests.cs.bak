@@ -1,0 +1,342 @@
+using System.Xml;
+using AdvisorLeads.Services;
+
+namespace AdvisorLeads.Tests.Services;
+
+/// <summary>
+/// Tests for SecCompilationService XML parsing logic.
+/// Uses in-memory XML strings to validate ParseFirmElement behavior.
+/// </summary>
+public class SecCompilationServiceTests
+{
+    private readonly SecCompilationService _service;
+
+    public SecCompilationServiceTests()
+    {
+        _service = new SecCompilationService();
+    }
+
+    [Fact]
+    public void ParseFirmElement_BasicInfo_ParsesCrdAndName()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="123456" SECNb="801-12345" BusNm="Test Advisory" LegalNm="Test Advisory LLC" SECRgnCD="NE" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal("123456", firm!.CrdNumber);
+        Assert.Equal("801-12345", firm.SECNumber);
+        Assert.Equal("Test Advisory", firm.Name);
+        Assert.Equal("Test Advisory LLC", firm.LegalName);
+        Assert.Equal("NE", firm.SECRegion);
+        Assert.Equal("SEC", firm.Source);
+        Assert.Equal("Investment Advisor", firm.RecordType);
+        Assert.True(firm.IsRegisteredWithSec);
+    }
+
+    [Fact]
+    public void ParseFirmElement_MainAddr_ParsesAddressFields()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100001" BusNm="Addr Firm" />
+            <MainAddr Strt1="123 Main St" Strt2="Suite 400" City="New York" State="NY" PostlCd="10001" PhNb="212-555-1234" FaxNb="212-555-5678" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal("123 Main St, Suite 400", firm!.Address);
+        Assert.Equal("New York", firm.City);
+        Assert.Equal("NY", firm.State);
+        Assert.Equal("10001", firm.ZipCode);
+        Assert.Equal("212-555-1234", firm.Phone);
+        Assert.Equal("212-555-5678", firm.FaxPhone);
+    }
+
+    [Fact]
+    public void ParseFirmElement_MailingAddr_CompositeString()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100002" BusNm="Mail Firm" />
+            <MailingAddr Strt1="PO Box 100" City="Boston" State="MA" PostlCd="02101" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Contains("PO Box 100", firm!.MailingAddress);
+        Assert.Contains("Boston", firm.MailingAddress);
+        Assert.Contains("MA", firm.MailingAddress);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Registration_ParsesStatusAndDate()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100003" BusNm="Reg Firm" />
+            <Rgstn FirmType="IA" St="APPROVED" Dt="2020-06-15" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal("APPROVED", firm!.RegistrationStatus);
+        Assert.Equal(new DateTime(2020, 6, 15), firm.RegistrationDate);
+        Assert.Equal("IA", firm.BusinessType);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item5A_ParsesEmployees()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100004" BusNm="Emp Firm" />
+            <Item5A TtlEmp="75" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal(75, firm!.NumberOfEmployees);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item5A_IgnoresZeroEmployees()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100005" BusNm="Zero Emp" />
+            <Item5A TtlEmp="0" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Null(firm!.NumberOfEmployees);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item5B_ParsesAdvisors()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100006" BusNm="Adv Firm" />
+            <Item5B TtlAdvsrs="42" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal(42, firm!.NumberOfAdvisors);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item5B_FallsBackToIAReps()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100007" BusNm="IA Firm" />
+            <Item5B IAReps="15" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal(15, firm!.NumberOfAdvisors);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item5D_ParsesClients()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100008" BusNm="Client Firm" />
+            <Item5D TtlClnts="350" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal(350, firm!.NumClients);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item5F_ParsesAumAndDiscretion()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100009" BusNm="AUM Firm" />
+            <Item5F RgltryAUM="5000000000" RgltryAUMNonDisc="750000000" HasDiscAuth="Y" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal(5_000_000_000m, firm!.RegulatoryAum);
+        Assert.Equal(750_000_000m, firm.RegulatoryAumNonDiscretionary);
+        Assert.True(firm.HasDiscretionaryAuthority);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item5F_DiscretionNo()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100010" BusNm="No Disc Firm" />
+            <Item5F RgltryAUM="1000000" HasDiscAuth="N" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.False(firm!.HasDiscretionaryAuthority);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item9A_ParsesCustody()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100011" BusNm="Custody Firm" />
+            <Item9A HasCustody="Y" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.True(firm!.HasCustody);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item9A_CustodyNo()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100012" BusNm="No Custody" />
+            <Item9A HasCustody="N" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.False(firm!.HasCustody);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Filing_ParsesDate()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100013" BusNm="Filing Firm" />
+            <Filing Dt="2024-03-22" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal("2024-03-22", firm!.LatestFilingDate);
+    }
+
+    [Fact]
+    public void ParseFirmElement_AllItems_ParsesCompleteFirm()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="999999" SECNb="801-99999" BusNm="Complete Firm" LegalNm="Complete Firm LLC" SECRgnCD="SE" />
+            <MainAddr Strt1="456 Oak Ave" City="Miami" State="FL" PostlCd="33101" PhNb="305-555-0000" />
+            <Rgstn St="APPROVED" Dt="2015-01-01" />
+            <Item5A TtlEmp="200" />
+            <Item5B TtlAdvsrs="50" />
+            <Item5D TtlClnts="1000" />
+            <Item5F RgltryAUM="10000000000" RgltryAUMNonDisc="2000000000" HasDiscAuth="Y" />
+            <Item9A HasCustody="Y" />
+            <Filing Dt="2024-06-30" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal("999999", firm!.CrdNumber);
+        Assert.Equal("Complete Firm", firm.Name);
+        Assert.Equal("FL", firm.State);
+        Assert.Equal(200, firm.NumberOfEmployees);
+        Assert.Equal(50, firm.NumberOfAdvisors);
+        Assert.Equal(1000, firm.NumClients);
+        Assert.Equal(10_000_000_000m, firm.RegulatoryAum);
+        Assert.Equal(2_000_000_000m, firm.RegulatoryAumNonDiscretionary);
+        Assert.True(firm.HasDiscretionaryAuthority);
+        Assert.True(firm.HasCustody);
+        Assert.Equal("2024-06-30", firm.LatestFilingDate);
+    }
+
+    [Fact]
+    public void ParseFirmElement_MissingCrd_ReturnsNull()
+    {
+        var xml = BuildFirmXml("""
+            <Info BusNm="No CRD Firm" />
+            """);
+
+        var firm = ParseFirm(xml);
+        Assert.Null(firm);
+    }
+
+    [Fact]
+    public void ParseFirmElement_MissingName_ReturnsNull()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100099" />
+            """);
+
+        var firm = ParseFirm(xml);
+        Assert.Null(firm);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item3C_ParsesStateOfOrganization()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100014" BusNm="Org Firm" />
+            <Item3C StateCD="DE" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal("DE", firm!.StateOfOrganization);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item3A_ParsesBusinessType()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100015" BusNm="Biz Firm" />
+            <Item3A OrgFormNm="Limited Liability Company" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal("Limited Liability Company", firm!.BusinessType);
+    }
+
+    [Fact]
+    public void ParseFirmElement_Item1_ParsesAumDescription()
+    {
+        var xml = BuildFirmXml("""
+            <Info FirmCrdNb="100016" BusNm="AUM Desc Firm" />
+            <Item1 Q1ODesc="$1B+" />
+            """);
+
+        var firm = ParseFirm(xml);
+
+        Assert.NotNull(firm);
+        Assert.Equal("$1B+", firm!.AumDescription);
+    }
+
+    private static string BuildFirmXml(string innerElements)
+    {
+        return $"<Firm>{innerElements}</Firm>";
+    }
+
+    private Models.Firm? ParseFirm(string xml)
+    {
+        using var stringReader = new System.IO.StringReader(xml);
+        using var reader = XmlReader.Create(stringReader, new XmlReaderSettings
+        {
+            IgnoreWhitespace = true,
+            IgnoreComments = true
+        });
+        return _service.ParseFirmElement(reader);
+    }
+}
