@@ -229,9 +229,11 @@ public class MainForm : Form
         _dashboardPanel = new DashboardPanel(_repo) { Dock = DockStyle.Fill };
         _dashboardPanel.RefreshDataRequested += OnFetchData;
         _dashboardPanel.DataQualityCheckRequested += OnDataQualityCheck;
-        _dashboardPanel.BrowseAdvisorsRequested += (_, _) => _mainTabs.SelectedTab = _tabIndividuals;
-        _dashboardPanel.BrowseFirmsRequested += (_, _) => _mainTabs.SelectedTab = _tabFirms;
-        _dashboardPanel.BrowseReportsRequested += (_, _) => _mainTabs.SelectedTab = _tabReports;
+        // Bug 1: Use BeginInvoke to defer tab navigation — direct SelectedTab assignment from
+        // inside a button-click event handler can hit WinForms reentrancy and be silently dropped.
+        _dashboardPanel.BrowseAdvisorsRequested += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedTab = _tabIndividuals));
+        _dashboardPanel.BrowseFirmsRequested    += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedTab = _tabFirms));
+        _dashboardPanel.BrowseReportsRequested  += (_, _) => BeginInvoke((Action)(() => _mainTabs.SelectedTab = _tabReports));
         _dashboardPanel.UpdateLastSync(_lastSyncTime?.ToLocalTime());
         var tabDashboard = new TabPage("Dashboard") { Padding = new Padding(0) };
         tabDashboard.Controls.Add(_dashboardPanel);
@@ -306,7 +308,22 @@ public class MainForm : Form
                     _ = _dashboardPanel.LoadStatsAsync();
                 }
                 else if (selected == _tabIndividuals)
+                {
+                    // Bug 2: _contentSplit.SplitterDistance is never set when the Individuals tab is
+                    // not visible at load time (SetSafeSplitterDistance returns early for a 0-width
+                    // container).  Defer the fix so the tab page has finished laying out before we
+                    // read its width; without this, Panel2 (_detailCard) ends up invisible or very narrow.
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (_contentSplit.SplitterDistance < ContentSplitDefaultDistance)
+                        {
+                            int preferred = Math.Max(ContentSplitDefaultDistance,
+                                                     (int)(_contentSplit.Width * 0.45));
+                            SetSafeSplitterDistance(_contentSplit, preferred);
+                        }
+                    }));
                     LoadAdvisors();
+                }
                 else if (selected == _tabFirms)
                     LoadFirms();
                 else if (_mainTabs.SelectedIndex == 4)
