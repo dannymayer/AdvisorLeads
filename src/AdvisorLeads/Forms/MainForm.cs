@@ -57,6 +57,9 @@ public class MainForm : Form
     private ReportsPanel _reportsPanel = null!;
     private AlertsPanel _alertsPanel = null!;
     private TabPage _tabAlerts = null!;
+    private TabPage _tabIndividuals = null!;
+    private TabPage _tabFirms = null!;
+    private TabPage _tabReports = null!;
     private Label _alertsBadgeLabel = null!;
     private AnalyticsPanel? _analyticsPanel;
     private GeographicAggregationService? _geoService;
@@ -226,27 +229,27 @@ public class MainForm : Form
         _dashboardPanel = new DashboardPanel(_repo) { Dock = DockStyle.Fill };
         _dashboardPanel.RefreshDataRequested += OnFetchData;
         _dashboardPanel.DataQualityCheckRequested += OnDataQualityCheck;
-        _dashboardPanel.BrowseAdvisorsRequested += (_, _) => _mainTabs.SelectedIndex = 1;
-        _dashboardPanel.BrowseFirmsRequested += (_, _) => _mainTabs.SelectedIndex = 2;
-        _dashboardPanel.BrowseReportsRequested += (_, _) => _mainTabs.SelectedIndex = 3;
+        _dashboardPanel.BrowseAdvisorsRequested += (_, _) => _mainTabs.SelectedTab = _tabIndividuals;
+        _dashboardPanel.BrowseFirmsRequested += (_, _) => _mainTabs.SelectedTab = _tabFirms;
+        _dashboardPanel.BrowseReportsRequested += (_, _) => _mainTabs.SelectedTab = _tabReports;
         _dashboardPanel.UpdateLastSync(_lastSyncTime?.ToLocalTime());
         var tabDashboard = new TabPage("Dashboard") { Padding = new Padding(0) };
         tabDashboard.Controls.Add(_dashboardPanel);
 
-        var tabIndividuals = new TabPage("Individuals") { Padding = new Padding(0) };
-        tabIndividuals.Controls.Add(_contentSplit);
-        tabIndividuals.Controls.Add(MakeNavBar());
-        var tabFirms = new TabPage("Firms") { Padding = new Padding(0) };
-        tabFirms.Controls.Add(_firmContentSplit);
-        tabFirms.Controls.Add(MakeNavBar());
+        _tabIndividuals = new TabPage("Individuals") { Padding = new Padding(0) };
+        _tabIndividuals.Controls.Add(_contentSplit);
+        _tabIndividuals.Controls.Add(MakeNavBar());
+        _tabFirms = new TabPage("Firms") { Padding = new Padding(0) };
+        _tabFirms.Controls.Add(_firmContentSplit);
+        _tabFirms.Controls.Add(MakeNavBar());
         _mainTabs.TabPages.Add(tabDashboard);
-        _mainTabs.TabPages.Add(tabIndividuals);
-        _mainTabs.TabPages.Add(tabFirms);
+        _mainTabs.TabPages.Add(_tabIndividuals);
+        _mainTabs.TabPages.Add(_tabFirms);
         _reportsPanel = new ReportsPanel(_reportingService) { Dock = DockStyle.Fill };
-        var tabReports = new TabPage("Reports") { Padding = new Padding(0) };
-        tabReports.Controls.Add(_reportsPanel);
-        tabReports.Controls.Add(MakeNavBar());
-        _mainTabs.TabPages.Add(tabReports);
+        _tabReports = new TabPage("Reports") { Padding = new Padding(0) };
+        _tabReports.Controls.Add(_reportsPanel);
+        _tabReports.Controls.Add(MakeNavBar());
+        _mainTabs.TabPages.Add(_tabReports);
 
         // Alerts tab (index 5)
         _alertsPanel = new AlertsPanel(
@@ -256,13 +259,13 @@ public class MainForm : Form
         _alertsPanel.OpenAdvisorRequested += (_, alert) =>
         {
             _filterPanel.SetCrdOverride(alert.EntityCrd);
-            _mainTabs.SelectedIndex = 1;
+            _mainTabs.SelectedTab = _tabIndividuals;
         };
         _alertsPanel.OpenFirmRequested += (_, alert) =>
         {
             _pendingFirmCrd = alert.EntityCrd;
             _firmFilterPanel.Clear();
-            _mainTabs.SelectedIndex = 2;
+            _mainTabs.SelectedTab = _tabFirms;
         };
         _tabAlerts = new TabPage("Alerts") { Padding = new Padding(0) };
         _tabAlerts.Controls.Add(_alertsPanel);
@@ -283,7 +286,7 @@ public class MainForm : Form
         {
             try
             {
-                bool shouldCollapse = _mainTabs.SelectedIndex != 1;
+                bool shouldCollapse = _mainTabs.SelectedTab != _tabIndividuals;
                 if (shouldCollapse && !_mainSplit.Panel1Collapsed)
                 {
                     if (_mainSplit.SplitterDistance > 0)
@@ -295,21 +298,26 @@ public class MainForm : Form
                     _mainSplit.Panel1Collapsed = false;
                     SetSafeSplitterDistance(_mainSplit, _mainSplitSavedDistance);
                 }
-                if (_mainTabs.SelectedIndex == 0)
+                var selected = _mainTabs.SelectedTab;
+                if (selected == null) return;
+                if (selected.Text == "Dashboard")
                 {
                     _dashboardPanel.UpdateLastSync(_lastSyncTime?.ToLocalTime());
                     _ = _dashboardPanel.LoadStatsAsync();
                 }
-                else if (_mainTabs.SelectedIndex == 1)
+                else if (selected == _tabIndividuals)
                     LoadAdvisors();
-                else if (_mainTabs.SelectedIndex == 2)
+                else if (selected == _tabFirms)
                     LoadFirms();
                 else if (_mainTabs.SelectedIndex == 4)
                     _analyticsPanel?.LoadDefaultView();
-                else if (_mainTabs.SelectedIndex == 5)
+                else if (selected == _tabAlerts)
                     _alertsPanel.RefreshAlerts();
             }
-            catch { /* prevent layout corruption from any tab-switch error */ }
+            catch (Exception ex)
+            {
+                SetStatus($"Navigation error: {ex.Message}");
+            }
         };
 
         // Badge label overlaid on the Alerts tab header
@@ -743,14 +751,14 @@ public class MainForm : Form
     {
         _pendingFirmCrd = firmCrd;
         _firmFilterPanel.Clear();
-        _mainTabs.SelectedIndex = 2;
+        _mainTabs.SelectedTab = _tabFirms;
         // LoadFirms() is triggered by SelectedIndexChanged; after it completes _pendingFirmCrd is applied
     }
 
     private void OnAdvisorNavigationRequested(object? sender, string firmCrd)
     {
         _filterPanel.SetFirmCrdOverride(firmCrd);
-        _mainTabs.SelectedIndex = 1;
+        _mainTabs.SelectedTab = _tabIndividuals;
         // LoadAdvisors() is triggered by SelectedIndexChanged
     }
 
