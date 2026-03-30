@@ -28,7 +28,16 @@ static class Program
             ApplicationConfiguration.Initialize();
             Log("ApplicationConfiguration initialized");
 
-            using var mainForm = new MainForm();
+            var appDataPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "AdvisorLeads");
+            Directory.CreateDirectory(appDataPath);
+            var dbPath = Path.Combine(appDataPath, "advisorleads.db");
+
+            var serviceProvider = ApplicationServices.Configure(dbPath, appDataPath);
+            Log("Services configured");
+
+            using var mainForm = new MainForm(serviceProvider);
             mainForm.Load += (_, _) => Log("MainForm.Load");
             mainForm.Shown += (_, _) => Log($"MainForm.Shown Visible={mainForm.Visible} WindowState={mainForm.WindowState} Bounds={mainForm.Bounds}");
             mainForm.FormClosed += (_, _) => Log("MainForm.FormClosed");
