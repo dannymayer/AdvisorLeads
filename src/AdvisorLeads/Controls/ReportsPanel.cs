@@ -43,7 +43,109 @@ public class ReportsPanel : UserControl
         TextBox MinTotalFirmCountText,
         TextBox MinHnwClientPctText,
         TextBox MinStateRegCountText,
-        ComboBox CompTypeCombo);
+        ComboBox CompTypeCombo,
+        Panel DescPanel,
+        Label LastRunLabel);
+
+    private readonly record struct ReportDesc(string Name, string Description, string UseCase, string[] KeyMetrics);
+
+    private static readonly Dictionary<string, ReportDesc> _reportDescriptions = new()
+    {
+        ["R1"]  = new("Flight Risk Scorecard",
+            "Scores each advisor on their likelihood of switching firms based on tenure, employment history, and AUM trends.",
+            "Identify advisors who may be ready to move — prioritize outreach to high-score targets.",
+            new[] { "Tenure", "Firm change count", "AUM trajectory", "Composite risk score (0–100)" }),
+        ["R2"]  = new("High-Value Target",
+            "Ranks advisors by a composite score factoring in experience, qualifications, firm AUM, and productivity.",
+            "Surface the highest-value prospects for your recruiting pipeline.",
+            new[] { "Years of experience", "Qualifications count", "AUM/advisor", "Target score (0–100)" }),
+        ["R3"]  = new("Tenure Distribution",
+            "Summarizes how long advisors have been at their current firm, bucketed into tenure ranges.",
+            "Understand market tenure patterns and identify the largest pools of potentially mobile advisors.",
+            new[] { "Tenure bucket", "Advisor count", "Average AUM/advisor", "Disclosure rate" }),
+        ["R4"]  = new("Serial Mover Profile",
+            "Identifies advisors with a history of frequent firm changes, including predicted readiness for their next move.",
+            "Target advisors with proven mobility — they are statistically more likely to move again.",
+            new[] { "Firm change count", "Change rate (moves/year)", "\"Due for Move\" flag" }),
+        ["R5"]  = new("New Market Entrants",
+            "Lists advisors who recently started their careers, useful for early relationship-building.",
+            "Build relationships with new advisors before competitors do.",
+            new[] { "Career start date", "Onboarding quarter", "Firm metrics" }),
+        ["R6"]  = new("Firm Headcount Trend",
+            "Shows firms gaining or losing advisors based on historical headcount data.",
+            "Identify firms in decline (talent leaving) or growth (healthy environment) for strategic targeting.",
+            new[] { "Current vs. prior headcount", "Change percentage", "AUM", "Pipeline count" }),
+        ["R7"]  = new("Broker Protocol Directory",
+            "Lists all firms enrolled in the Broker Protocol, which eases advisor transitions.",
+            "Target protocol firms when recruiting — advisors can bring their book without legal risk.",
+            new[] { "Protocol enrollment", "AUM/advisor", "HNW client percentage", "Comp model" }),
+        ["R8"]  = new("Firm AUM Trajectory",
+            "Tracks AUM changes across 1, 3, and 5-year windows for each firm.",
+            "Find firms on a downward AUM trajectory — advisors there may be more receptive to a move.",
+            new[] { "AUM at 1yr/3yr/5yr ago", "Percentage change over each period" }),
+        ["R9"]  = new("Competitive Landscape",
+            "Shows each firm's share of advisors and AUM within the filtered market.",
+            "Understand which firms dominate the market and benchmark your targets.",
+            new[] { "Advisor market share (%)", "AUM market share (%)" }),
+        ["R10"] = new("Credential Frequency",
+            "Shows how common each professional credential (CFP, CFA, etc.) is across the advisor population.",
+            "Understand credential saturation to target advisors with specific designations.",
+            new[] { "Credential name", "Advisor count", "Percentage of market" }),
+        ["R11"] = new("Geographic Density",
+            "Summarizes advisor distribution, activity, and experience by state.",
+            "Identify high-density states for regional campaigns or underserved markets for expansion.",
+            new[] { "Advisor count", "Active count", "Average experience", "Disclosure rate" }),
+        ["R12"] = new("AUM by Geography",
+            "Shows average AUM per advisor and concentration of large-AUM firms by state.",
+            "Target high-AUM states for premium recruiting campaigns.",
+            new[] { "Average AUM/advisor", "Count of advisors above $500M AUM threshold" }),
+        ["R13"] = new("Disclosure Risk Profile",
+            "Details the disclosure history of advisors, categorized by disclosure type.",
+            "Compliance screening — identify advisors with clean vs. problematic regulatory histories.",
+            new[] { "Disclosure count by type (criminal, regulatory, civil, complaints, financial, termination)" }),
+        ["R14"] = new("Clean Record Premium",
+            "Lists advisors with no disclosure history who are also Broker Protocol members.",
+            "Premium recruits — advisors with spotless compliance records and easy transition eligibility.",
+            new[] { "Tenure", "Experience", "Email availability", "AUM/advisor" }),
+        ["R15"] = new("Pipeline Funnel",
+            "Shows your recruiting funnel from all active advisors down to those already in your CRM.",
+            "Track pipeline health and identify where prospects are dropping off.",
+            new[] { "Active count", "Favorited count", "With email", "In CRM (funnel stages)" }),
+        ["R16"] = new("Contact Coverage Gap",
+            "Lists advisors missing direct email but whose firm has contactable information.",
+            "Prioritize advisors you can reach indirectly through firm contact info.",
+            new[] { "Missing email flag", "Firm phone", "Firm website" }),
+        ["R17"] = new("Firm Stability Signal",
+            "Scores firms on instability based on AUM changes, headcount shifts, and disclosure rates.",
+            "Target advisors at unstable firms — they may be more open to conversations.",
+            new[] { "AUM change", "Headcount change", "Average disclosures", "Instability score (0–100)" }),
+        ["R18"] = new("Compensation Analysis",
+            "Breaks down the market by compensation model (fee-only, commission, both).",
+            "Align your recruiting pitch to the compensation culture at target firms.",
+            new[] { "Firm count", "Advisor count", "Average AUM", "HNW percentage by comp model" }),
+        ["R19"] = new("HNW Focus Firms",
+            "Ranks firms by their focus on high-net-worth clients, with upmarket scoring.",
+            "Target firms already serving HNW clients — advisors there expect premium compensation offers.",
+            new[] { "HNW client percentage", "Fee-only indicator", "Private fund count", "Upmarket score" }),
+        ["R20"] = new("Multi-State Registration",
+            "Identifies advisors registered in multiple states, indicating geographic portability.",
+            "Find advisors who can move to your target markets without re-registration hurdles.",
+            new[] { "Registered state count", "States list", "Portability tier (1/2/3)" }),
+    };
+
+    private static readonly Dictionary<string, string> _columnTooltips = new()
+    {
+        ["AUM"]          = "Total regulatory AUM reported by the firm on their most recent Form ADV filing.",
+        ["AUM/Adv"]      = "Firm's regulatory AUM divided by the number of registered advisors — a productivity indicator.",
+        ["AUM∆1yr%"]     = "Percentage change in firm AUM compared to one year ago.",
+        ["Change Rate"]  = "Average number of employer changes per year of career.",
+        ["Tier"]         = "Portability tier: 1 = 2–4 states, 2 = 5–9 states, 3 = 10+ states.",
+        ["BP"]           = "Broker Protocol member. Advisors at protocol firms can transition without legal risk to their book of business.",
+        ["HNW%"]         = "Percentage of the firm's clients classified as high-net-worth ($1M+ investable assets).",
+        ["Disc Rate%"]   = "Percentage of advisors at this firm who have at least one regulatory disclosure.",
+        ["Due for Move"] = "Estimated readiness based on historical change rate and current tenure.",
+        ["Pipeline"]     = "Number of advisors from this firm in your favorites list.",
+    };
 
     private readonly ReportingService _svc;
     private readonly TabPageControls?[] _tabControls = new TabPageControls?[6];
@@ -154,6 +256,29 @@ public class ReportsPanel : UserControl
         var pnlMinStateRegCount = FilterPair("Min State Regs:", txtMinStateRegCount);
         var pnlCompType = FilterPair("Comp Type:", cboCompType);
 
+        var rtbDesc = new RichTextBox
+        {
+            Dock = DockStyle.Fill,
+            ReadOnly = true,
+            BorderStyle = BorderStyle.None,
+            BackColor = SystemColors.ControlLight,
+            ScrollBars = RichTextBoxScrollBars.Vertical,
+            Font = new Font("Segoe UI", 9f)
+        };
+        var descPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 120,
+            BackColor = SystemColors.ControlLight,
+            Padding = new Padding(8, 6, 8, 4)
+        };
+        descPanel.Controls.Add(rtbDesc);
+        descPanel.Paint += (_, e) =>
+        {
+            using var pen = new Pen(SystemColors.ControlDark, 1);
+            e.Graphics.DrawLine(pen, 0, descPanel.Height - 1, descPanel.Width, descPanel.Height - 1);
+        };
+
         var btnExport = new Button
         {
             Text = "Export CSV",
@@ -175,6 +300,14 @@ public class ReportsPanel : UserControl
             ForeColor = Color.Red,
             TextAlign = ContentAlignment.MiddleLeft,
             Margin = new Padding(8, 3, 0, 0)
+        };
+
+        var lblLastRun = new Label
+        {
+            AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(12, 3, 0, 0),
+            ForeColor = SystemColors.GrayText
         };
 
         var filterFlow = new FlowLayoutPanel
@@ -211,12 +344,15 @@ public class ReportsPanel : UserControl
         bottomBar.Controls.Add(btnExport);
         bottomBar.Controls.Add(lblRowCount);
         bottomBar.Controls.Add(lblError);
+        bottomBar.Controls.Add(lblLastRun);
 
-        // Add Top first, Bottom second, Fill last so docking resolves correctly
+        // WinForms docks in reverse Controls-collection order (highest index first).
+        // Add grid first (Fill) → index 0; add descPanel last → highest index, claims top edge first.
         var rightPanel = new Panel { Dock = DockStyle.Fill };
-        rightPanel.Controls.Add(filterFlow);
-        rightPanel.Controls.Add(bottomBar);
         rightPanel.Controls.Add(grid);
+        rightPanel.Controls.Add(bottomBar);
+        rightPanel.Controls.Add(filterFlow);
+        rightPanel.Controls.Add(descPanel);
 
         var split = new SplitContainer
         {
@@ -241,7 +377,8 @@ public class ReportsPanel : UserControl
             btnRun, pb,
             lblRowCount, lblError, btnExport,
             cboState, cboRecordType, txtMinAum, txtMinAdvisors, txtMinYearsExp,
-            txtMinTotalFirmCount, txtMinHnwPct, txtMinStateRegCount, cboCompType);
+            txtMinTotalFirmCount, txtMinHnwPct, txtMinStateRegCount, cboCompType,
+            descPanel, lblLastRun);
 
         listBox.SelectedIndexChanged += (_, _) => UpdateFilterVisibility(tabIndex);
         btnRun.Click += (_, _) => RunReportAsync(tabIndex);
@@ -328,6 +465,8 @@ public class ReportsPanel : UserControl
         if (report.StartsWith("R19:")) tc.FilterMinHnwPct.Visible = true;
         if (report.StartsWith("R15:") || report.StartsWith("R16:")) tc.FavoritedOnlyCheck.Visible = true;
         if (report.StartsWith("R20:")) tc.FilterMinStateRegCount.Visible = true;
+
+        UpdateDescriptionPanel(tc.DescPanel, report);
     }
 
     private static bool IsAdvisorReport(string report) =>
@@ -360,6 +499,7 @@ public class ReportsPanel : UserControl
         {
             var filter = BuildFilter(tc);
             await RunReportCoreAsync(report, filter, tc);
+            tc.LastRunLabel.Text = $"Last run: {DateTime.Now:h:mm tt}";
         }
         catch (Exception ex)
         {
@@ -698,14 +838,82 @@ public class ReportsPanel : UserControl
                     r.PortabilityTier);
             tc.RowCountLabel.Text = $"{data.Count:N0} records";
         }
+
+        string reportId = report.Split(':')[0].Trim();
+        ApplyColumnTooltips(reportId, g);
+        ApplyColumnWidths(g);
+        foreach (DataGridViewColumn col in g.Columns)
+            col.SortMode = DataGridViewColumnSortMode.Automatic;
     }
 
     private static DataGridViewTextBoxColumn TC(string header, bool rightAlign = false)
     {
-        var col = new DataGridViewTextBoxColumn { HeaderText = header };
+        var col = new DataGridViewTextBoxColumn { HeaderText = header, Name = header };
         if (rightAlign)
             col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
         return col;
+    }
+
+    private static void UpdateDescriptionPanel(Panel descPanel, string reportItem)
+    {
+        var rtb = (RichTextBox)descPanel.Controls[0];
+        rtb.Clear();
+        if (string.IsNullOrEmpty(reportItem)) return;
+
+        string id = reportItem.Split(':')[0].Trim();
+        if (!_reportDescriptions.TryGetValue(id, out var desc)) return;
+
+        RtbAppend(rtb, desc.Name + "\n", 10f, FontStyle.Bold);
+        RtbAppend(rtb, desc.Description + "\n", 9f, FontStyle.Regular);
+        RtbAppend(rtb, "Use case: " + desc.UseCase + "\n", 9f, FontStyle.Italic);
+        RtbAppend(rtb, "Key metrics:\n", 9f, FontStyle.Regular);
+        foreach (var m in desc.KeyMetrics)
+            RtbAppend(rtb, $"  • {m}\n", 9f, FontStyle.Regular);
+
+        rtb.SelectionStart = 0;
+        rtb.ScrollToCaret();
+    }
+
+    private static void RtbAppend(RichTextBox rtb, string text, float size, FontStyle style)
+    {
+        rtb.SelectionStart = rtb.TextLength;
+        rtb.SelectionLength = 0;
+        using var f = new Font(rtb.Font.FontFamily, size, style);
+        rtb.SelectionFont = f;
+        rtb.AppendText(text);
+    }
+
+    private void ApplyColumnTooltips(string reportId, DataGridView g)
+    {
+        foreach (DataGridViewColumn col in g.Columns)
+        {
+            if (_columnTooltips.TryGetValue(col.Name, out var tip))
+                col.ToolTipText = tip;
+        }
+
+        var scoreCol = g.Columns["Score"];
+        if (scoreCol != null)
+        {
+            scoreCol.ToolTipText = reportId switch
+            {
+                "R1"  => "Composite flight risk score (0–100). Higher = more likely to move.",
+                "R2"  => "Composite target value score (0–100). Higher = more valuable recruit.",
+                "R17" => "Firm instability score (0–100). Higher = more unstable.",
+                "R19" => "Upmarket focus score (0–100). Higher = more HNW-focused.",
+                _     => "Composite score (0–100). Higher scores indicate stronger match for this report's criteria."
+            };
+        }
+    }
+
+    private static void ApplyColumnWidths(DataGridView g)
+    {
+        g.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+        g.AutoResizeColumns(DataGridViewAutoSizeColumnsMode.AllCells);
+        foreach (DataGridViewColumn col in g.Columns)
+        {
+            if (col.Width > 250)
+                col.Width = 250;
+        }
     }
 
     private static ReportFilter BuildFilter(TabPageControls tc)
