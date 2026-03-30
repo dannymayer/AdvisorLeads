@@ -145,7 +145,7 @@ public partial class FilterPanel : UserControl
         layout.Controls.Add(MakeLabel("Status:"), 0, row);
         _cboStatus = MakeCombo();
         _cboStatus.Items.AddRange(new[] { "(All)", "Active", "Inactive", "Barred", "Terminated", "Suspended" });
-        _cboStatus.SelectedIndex = 0;
+        _cboStatus.SelectedIndex = 1; // Default to "Active"
         layout.Controls.Add(_cboStatus, 1, row++);
 
         layout.Controls.Add(MakeLabel("License/Exam:"), 0, row);

@@ -52,7 +52,7 @@ public class FirmFilterPanel : UserControl
 
         flow.Controls.Add(MakeLabel("Type:"));
         _cboRecordType = new ComboBox { Width = 145, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 2, 8, 0) };
-        _cboRecordType.Items.AddRange(new[] { "(All)", "Investment Advisor", "Broker-Dealer" });
+        _cboRecordType.Items.AddRange(new[] { "(All)", "Investment Adviser", "Broker-Dealer" });
         _cboRecordType.SelectedIndex = 0;
         flow.Controls.Add(_cboRecordType);
 
