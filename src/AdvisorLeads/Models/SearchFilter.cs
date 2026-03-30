@@ -14,7 +14,7 @@ public class SearchFilter
     public bool ShowFavoritesOnly { get; set; } = false;
     public bool? IsImportedToCrm { get; set; }
     public string? Source { get; set; }
-    // "Investment Advisor Representative", "Registered Representative", "Investment Advisor", "Broker-Dealer"
+    // "Investment Advisor Representative", "Registered Representative", "Investment Adviser", "Broker-Dealer"
     public string? RecordType { get; set; }
     public int? MinYearsExperience { get; set; }
     public int? MaxYearsExperience { get; set; }
@@ -26,4 +26,11 @@ public class SearchFilter
     public bool SortDescending { get; set; } = false;
     public int PageSize { get; set; } = 500;
     public int PageNumber { get; set; } = 1;
+
+    // ── Enrichment filters ──────────────────────────────────────────────
+    public bool? HasActiveSanction { get; set; }
+    public bool? HasSecEnforcementAction { get; set; }
+    public bool? HasRecentFirmChange { get; set; }
+    public bool? HasCourtRecord { get; set; }
+    public string? RegistrationLevel { get; set; }
 }

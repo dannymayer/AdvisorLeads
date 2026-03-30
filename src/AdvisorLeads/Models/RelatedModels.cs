@@ -24,6 +24,10 @@ public class AdvisorRegistration
     public string? RegistrationCategory { get; set; }  // "IA", "BC", etc.
     public string? RegistrationStatus { get; set; }
     public string? StatusDate { get; set; }
+    /// <summary>"State" for state registrations, "SRO" for SRO registrations.</summary>
+    public string RegistrationType { get; set; } = "State";
+    /// <summary>For SRO registrations: the SRO organization name (e.g. "FINRA", "MSRB").</summary>
+    public string? SroName { get; set; }
 }
 
 public class Disclosure

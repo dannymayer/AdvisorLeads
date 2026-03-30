@@ -4,7 +4,7 @@ public class FirmSearchFilter
 {
     public string? NameQuery { get; set; }
     public string? State { get; set; }
-    public string? RecordType { get; set; }           // "Investment Advisor" or "Broker-Dealer"
+    public string? RecordType { get; set; }           // "Investment Adviser" or "Broker-Dealer"
     public string? RegistrationStatus { get; set; }
     public int? MinAdvisors { get; set; }
     public string? SortBy { get; set; } = "Name";
@@ -22,4 +22,13 @@ public class FirmSearchFilter
     public string? MaScoreGrade { get; set; }
     public int PageSize { get; set; } = 5000;
     public int PageNumber { get; set; } = 1;
+
+    // ── Enrichment filters ──────────────────────────────────────────────
+    public string? InvestmentStrategy { get; set; }
+    public string? OwnershipStructure { get; set; }
+    public bool? HasActiveSanction { get; set; }
+    public bool? HasSecEnforcementAction { get; set; }
+    public string? RegistrationLevel { get; set; }
+    public bool? CryptoExposure { get; set; }
+    public bool? WrapFeePrograms { get; set; }
 }

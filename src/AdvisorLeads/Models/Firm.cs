@@ -17,7 +17,7 @@ public class Firm
     public int? NumberOfAdvisors { get; set; }
     public DateTime? RegistrationDate { get; set; }
     public string? Source { get; set; }
-    // "Investment Advisor" (SEC RIA) or "Broker-Dealer" (FINRA)
+    // "Investment Adviser" (SEC RIA) or "Broker-Dealer" (FINRA)
     public string? RecordType { get; set; }
     public string? SECNumber { get; set; }        // SECNb
     public string? SECRegion { get; set; }        // SECRgnCD
@@ -129,7 +129,42 @@ public class Firm
     /// <summary>Fiscal year end in MMDD format (e.g., "1231" = December 31).</summary>
     public string? FiscalYearEnd { get; set; }
 
+    /// <summary>Advisor headcount from the prior ADV filing (snapshot for headcount trend tracking).</summary>
+    public int? PriorAdvisorCount { get; set; }
+    /// <summary>When the PriorAdvisorCount snapshot was taken (ISO date string).</summary>
+    public DateTime? PriorAdvisorCountDate { get; set; }
+
+    // ── Feature 2: FINRA Sanctions ────────────────────────────────────────
+    public bool HasActiveSanction { get; set; }
+    public decimal? MaxFineAmount { get; set; }
+    public string? SanctionType { get; set; }
+    public DateTime? SanctionEnrichedAt { get; set; }
+
+    // ── Feature 3: Form ADV Deep Enrichment ──────────────────────────────
+    public string? InvestmentStrategies { get; set; }
+    public bool? WrapFeePrograms { get; set; }
+    public bool? IsDuallyRegistered { get; set; }
+    public string? CCOName { get; set; }
+    public string? CFOName { get; set; }
+    public bool? SoftDollarArrangements { get; set; }
+    public bool? CryptoExposure { get; set; }
+    public bool? DirectIndexing { get; set; }
+    public string? MarketingArrangements { get; set; }
+    // "Individual-Owned","PE-Backed","RIA-Rollup","Bank-Owned","Other"
+    public string? OwnershipStructure { get; set; }
+    public DateTime? FormAdvDeepEnrichedAt { get; set; }
+
+    // ── Feature 4: Registration Level ─────────────────────────────────────
+    public string? RegistrationLevel { get; set; }
+
+    // ── Feature 5: SEC Enforcement ────────────────────────────────────────
+    public bool HasSecEnforcementAction { get; set; }
+    public DateTime? SecEnforcementEnrichedAt { get; set; }
+
+    public int? AdvisorCountChange1Yr { get; set; }
+
     public bool IsExcluded { get; set; }
+    public bool IsWatched { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

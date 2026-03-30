@@ -56,14 +56,51 @@ public class Advisor
 
     // Direct profile links
     public string? BrokerCheckUrl { get; set; }
+    /// <summary>Direct PDF download URL for the BrokerCheck report.</summary>
+    public string? BrokerCheckReportPdfUrl { get; set; }
+    /// <summary>Date the advisor started at their current firm (denormalized for tenure calculation).</summary>
+    public DateTime? CurrentFirmStartDate { get; set; }
 
     public bool IsExcluded { get; set; }
     public string? ExclusionReason { get; set; }
     public bool IsFavorited { get; set; }
+    public bool IsWatched { get; set; }
     public bool IsImportedToCrm { get; set; }
     public string? CrmId { get; set; }
+    /// <summary>UTC time this CRD was first inserted into the local database.</summary>
+    public DateTime? FirstSeenAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    // ── Feature 1: Employment Delta ──────────────────────────────────────
+    public bool HasRecentFirmChange { get; set; }
+    public DateTime? FirmChangeDetectedAt { get; set; }
+    public DateTime? LastEmploymentCheckDate { get; set; }
+
+    // ── Feature 2: FINRA Sanctions ────────────────────────────────────────
+    public bool HasActiveSanction { get; set; }
+    public decimal? MaxFineAmount { get; set; }
+    public string? SanctionType { get; set; }
+    public DateTime? SanctionEnrichedAt { get; set; }
+
+    // ── Feature 4: Registration Level ─────────────────────────────────────
+    public string? RegistrationLevel { get; set; }
+
+    // ── Feature 5: SEC Enforcement ────────────────────────────────────────
+    public bool HasSecEnforcementAction { get; set; }
+    public string? SecEnforcementUrl { get; set; }
+    public DateTime? SecEnforcementEnrichedAt { get; set; }
+
+    // ── Feature 8: Court Records ──────────────────────────────────────────
+    public bool CourtRecordFlag { get; set; }
+    public string? CourtRecordUrl { get; set; }
+    public DateTime? CourtRecordDate { get; set; }
+    public string? CourtRecordSummary { get; set; }
+    public DateTime? CourtRecordEnrichedAt { get; set; }
+
+    public int? MobilityScore { get; set; }
+    public int? DisclosureSeverityScore { get; set; }
+    public DateTime? MobilityScoreUpdatedAt { get; set; }
 
     public List<EmploymentHistory> EmploymentHistory { get; set; } = new();
     public List<Disclosure> Disclosures { get; set; } = new();

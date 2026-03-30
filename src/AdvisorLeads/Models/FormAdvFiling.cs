@@ -23,6 +23,8 @@ public class FormAdvFiling
     public int? NumberOfEmployees { get; set; }
     /// <summary>Number of investment adviser representatives.</summary>
     public int? NumberOfAdvisors { get; set; }
+    /// <summary>Advisor headcount from this filing (populated from reporting pipeline).</summary>
+    public int? AdvisorCount { get; set; }
     /// <summary>Number of clients at filing time.</summary>
     public int? NumClients { get; set; }
     /// <summary>Registration status at filing time.</summary>
