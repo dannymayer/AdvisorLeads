@@ -18,6 +18,7 @@ public class ListManagerForm : Form
     private Button _btnDeleteList = null!;
     private Button _btnRemoveMember = null!;
     private Button _btnExportCsv = null!;
+    private Button _btnExportAdvanced = null!;
     private Button _btnExportCrm = null!;
     private Button _btnClose = null!;
     private Label _lblListInfo = null!;
@@ -156,13 +157,15 @@ public class ListManagerForm : Form
         };
         _btnRemoveMember = MakeButton("Remove Selected", Color.FromArgb(200, 80, 60), 120);
         _btnExportCsv = MakeButton("Export CSV", Color.FromArgb(60, 140, 60), 100);
+        _btnExportAdvanced = MakeButton("Export…", Color.FromArgb(40, 120, 160), 80);
         _btnExportCrm = MakeButton("Export to Wealthbox", Color.FromArgb(130, 80, 170), 140);
         _btnClose = MakeButton("Close", Color.FromArgb(130, 130, 130), 70);
         _btnRemoveMember.Click += OnRemoveMember;
         _btnExportCsv.Click += (_, _) => ExportListToCsv();
+        _btnExportAdvanced.Click += (_, _) => OnExportAdvanced();
         _btnExportCrm.Click += async (_, _) => await ImportListToCrm();
         _btnClose.Click += (_, _) => Close();
-        memberBtnPanel.Controls.AddRange(new Control[] { _btnRemoveMember, _btnExportCsv, _btnExportCrm, _btnClose });
+        memberBtnPanel.Controls.AddRange(new Control[] { _btnRemoveMember, _btnExportCsv, _btnExportAdvanced, _btnExportCrm, _btnClose });
 
         rightPanel.Controls.Add(_lvMembers);
         rightPanel.Controls.Add(_lblListInfo);
@@ -366,6 +369,67 @@ public class ListManagerForm : Form
         return value;
     }
 
+    private void OnExportAdvanced()
+    {
+        if (!_currentMembers.Any())
+        {
+            MessageBox.Show("The list is empty.", "Nothing to Export", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var allKeys = AdvisorExportColumns.All.Select(c => c.Key).ToList();
+        var allHeaders = AdvisorExportColumns.All.Select(c => c.Header).ToList();
+        var defaultKeys = AdvisorExportColumns.GetPreset("Default").Select(c => c.Key).ToList();
+
+        var selected = _lvMembers.SelectedItems.Cast<ListViewItem>()
+            .Where(i => i.Tag is int)
+            .Select(i => _currentMembers.FirstOrDefault(a => a.Id == (int)i.Tag!))
+            .Where(a => a != null).Cast<Advisor>().ToList();
+
+        using var dlg = new ExportDialog(
+            title: "Export List Members",
+            allColumnKeys: allKeys,
+            allColumnHeaders: allHeaders,
+            selectedKeys: defaultKeys,
+            presetNames: AdvisorExportColumns.PresetNames,
+            loadSetting: _ => null,
+            saveSetting: (_, _) => { },
+            totalRecords: _currentMembers.Count,
+            selectedCount: selected.Count,
+            entityType: "Advisor");
+
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        var selectedColumns = AdvisorExportColumns.All
+            .Where(c => dlg.SelectedKeys.Contains(c.Key))
+            .OrderBy(c => dlg.SelectedKeys.IndexOf(c.Key))
+            .ToList();
+
+        var records = dlg.ExportAllRecords ? _currentMembers : selected;
+
+        try
+        {
+            if (dlg.OutputFormat == "Excel")
+            {
+                ExportService.ExportToExcel(
+                    records, selectedColumns, dlg.ChosenFilePath,
+                    sheetName: "Advisors",
+                    applyConditionalFormatting: dlg.ApplyConditionalFormatting,
+                    rowStyleSelector: ExportService.GetAdvisorRowStyle);
+            }
+            else
+            {
+                ExportService.ExportToCsv(records, selectedColumns, dlg.ChosenFilePath);
+            }
+            _lblStatus.Text = $"Exported {records.Count} record(s) to {Path.GetFileName(dlg.ChosenFilePath)}";
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dlg.ChosenFilePath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Export failed: {ex.Message}", "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     private async Task ImportListToCrm()
     {
         if (!_currentMembers.Any())
@@ -446,6 +510,7 @@ public class ListManagerForm : Form
         _btnDeleteList.Enabled = hasList;
         _btnRemoveMember.Enabled = hasSelection;
         _btnExportCsv.Enabled = _currentMembers.Count > 0;
+        _btnExportAdvanced.Enabled = _currentMembers.Count > 0;
         _btnExportCrm.Enabled = _currentMembers.Count > 0 && _wealthbox != null;
     }
 

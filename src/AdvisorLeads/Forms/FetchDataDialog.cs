@@ -191,17 +191,22 @@ public class FetchDataDialog : Form
         _rtbLog.ScrollToCaret();
     }
 
-    public void FetchComplete(int count)
+    public void FetchComplete(int newCount, int updatedCount)
     {
         if (InvokeRequired)
         {
-            Invoke(() => FetchComplete(count));
+            Invoke(() => FetchComplete(newCount, updatedCount));
             return;
         }
+        int total = newCount + updatedCount;
         _progress.Visible = false;
         _btnFetch.Enabled = true;
-        _lblStatus.Text = $"Done! {count} advisor(s) synced.";
-        _rtbLog.AppendText($"✓ Completed: {count} advisor(s) synced.{Environment.NewLine}");
+        _lblStatus.Text = total == 0
+            ? "Done! No records matched the query."
+            : $"Done! {total} synced — {newCount} new, {updatedCount} updated.";
+        _rtbLog.AppendText(total == 0
+            ? $"✓ Completed: No records found.{Environment.NewLine}"
+            : $"✓ Completed: {total} synced ({newCount} new, {updatedCount} updated).{Environment.NewLine}");
     }
 
     public void FetchFailed(string error)

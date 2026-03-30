@@ -1,0 +1,296 @@
+using AdvisorLeads.Data;
+using AdvisorLeads.Models;
+using AdvisorLeads.Services;
+
+namespace AdvisorLeads.Controls;
+
+public class DashboardPanel : UserControl
+{
+    private readonly Label _lblTitle;
+    private readonly Label _lblRefresh;
+    private readonly Panel _statsRow1;
+    private readonly Panel _statsRow2;
+    private readonly ListView _topFirmsListView;
+    private readonly FlowLayoutPanel _quickActions;
+
+    // Stat card labels (value + subtitle)
+    private readonly Label _valAdvisors, _valFirms, _valFavorites, _valCrm;
+    private readonly Label _valDisclosures, _valMaGradeA, _valFavsNoCrm, _valUpdatedToday;
+
+    public event EventHandler? ViewActiveIarsRequested;
+    public event EventHandler? ViewFavoritesRequested;
+    public event EventHandler? ViewMaTargetsRequested;
+    public event EventHandler<Firm>? FirmSelected;
+
+    private static readonly Color AccentBlue = Color.FromArgb(45, 85, 155);
+    private static readonly Color CardBg = Color.White;
+    private static readonly Color PanelBg = Color.FromArgb(243, 245, 248);
+    private static readonly Color SectionHeader = Color.FromArgb(90, 100, 120);
+    private static readonly Color SubtitleColor = Color.FromArgb(120, 130, 145);
+
+    public DashboardPanel()
+    {
+        BackColor = PanelBg;
+        Dock = DockStyle.Fill;
+        AutoScroll = true;
+        Padding = new Padding(24);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            Padding = new Padding(0)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        // Title row
+        var titlePanel = new Panel { Height = 48, Dock = DockStyle.Top };
+        _lblTitle = new Label
+        {
+            Text = "📊 Dashboard",
+            Font = new Font("Segoe UI", 18, FontStyle.Bold),
+            ForeColor = AccentBlue,
+            AutoSize = true,
+            Location = new Point(0, 8)
+        };
+        _lblRefresh = new Label
+        {
+            Text = "",
+            Font = new Font("Segoe UI", 9),
+            ForeColor = SubtitleColor,
+            AutoSize = true,
+            Anchor = AnchorStyles.Right | AnchorStyles.Top,
+            Location = new Point(400, 16)
+        };
+        titlePanel.Controls.AddRange(new Control[] { _lblTitle, _lblRefresh });
+        layout.Controls.Add(titlePanel);
+        layout.SetRow(titlePanel, 0);
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        // Stats row 1
+        _statsRow1 = new Panel { Height = 100, Dock = DockStyle.Top, Margin = new Padding(0, 12, 0, 0) };
+        (_valAdvisors, _) = AddStatCard(_statsRow1, "👤", "0", "Total Advisors", 0);
+        (_valFirms, _) = AddStatCard(_statsRow1, "🏢", "0", "Total Firms", 1);
+        (_valFavorites, _) = AddStatCard(_statsRow1, "⭐", "0", "Favorites", 2);
+        (_valCrm, _) = AddStatCard(_statsRow1, "☁", "0", "In CRM", 3);
+        _statsRow1.Resize += (_, _) => LayoutStatCards(_statsRow1);
+        layout.Controls.Add(_statsRow1);
+        layout.SetRow(_statsRow1, 1);
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        // Stats row 2
+        _statsRow2 = new Panel { Height = 100, Dock = DockStyle.Top, Margin = new Padding(0, 8, 0, 0) };
+        (_valDisclosures, _) = AddStatCard(_statsRow2, "⚠", "0", "With Disclosures", 0);
+        (_valMaGradeA, _) = AddStatCard(_statsRow2, "🅰", "0", "Top Firms (by AUM)", 1);
+        (_valFavsNoCrm, _) = AddStatCard(_statsRow2, "📋", "0", "Favs Not in CRM", 2);
+        (_valUpdatedToday, _) = AddStatCard(_statsRow2, "🔄", "0", "Updated Today", 3);
+        _statsRow2.Resize += (_, _) => LayoutStatCards(_statsRow2);
+        layout.Controls.Add(_statsRow2);
+        layout.SetRow(_statsRow2, 2);
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        // Section header: Top Firms
+        var sectionLabel = new Label
+        {
+            Text = "── TOP FIRMS BY AUM ──",
+            Font = new Font("Segoe UI Semibold", 11),
+            ForeColor = SectionHeader,
+            AutoSize = true,
+            Padding = new Padding(0, 16, 0, 4)
+        };
+        layout.Controls.Add(sectionLabel);
+        layout.SetRow(sectionLabel, 3);
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        // Top M&A firms list
+        _topFirmsListView = new ListView
+        {
+            Height = 220,
+            Dock = DockStyle.Top,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false,
+            Font = new Font("Segoe UI", 9),
+            BorderStyle = BorderStyle.FixedSingle,
+            HeaderStyle = ColumnHeaderStyle.Nonclickable
+        };
+        _topFirmsListView.Columns.Add("#", 30);
+        _topFirmsListView.Columns.Add("Firm Name", 250);
+        _topFirmsListView.Columns.Add("State", 50);
+        _topFirmsListView.Columns.Add("AUM", 100);
+        _topFirmsListView.Columns.Add("Advisors", 70);
+        _topFirmsListView.Columns.Add("Type", 130);
+        _topFirmsListView.Columns.Add("Status", 80);
+        _topFirmsListView.DoubleClick += OnFirmDoubleClick;
+        layout.Controls.Add(_topFirmsListView);
+        layout.SetRow(_topFirmsListView, 4);
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        // Quick actions
+        var quickLabel = new Label
+        {
+            Text = "── QUICK ACTIONS ──",
+            Font = new Font("Segoe UI Semibold", 11),
+            ForeColor = SectionHeader,
+            AutoSize = true,
+            Padding = new Padding(0, 16, 0, 4)
+        };
+        layout.Controls.Add(quickLabel);
+        layout.SetRow(quickLabel, 5);
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        _quickActions = new FlowLayoutPanel
+        {
+            Height = 50,
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true
+        };
+        AddQuickAction("View Active IARs →", () => ViewActiveIarsRequested?.Invoke(this, EventArgs.Empty));
+        AddQuickAction("View Favorites →", () => ViewFavoritesRequested?.Invoke(this, EventArgs.Empty));
+        AddQuickAction("View Top Firms →", () => ViewMaTargetsRequested?.Invoke(this, EventArgs.Empty));
+        layout.Controls.Add(_quickActions);
+        layout.SetRow(_quickActions, 6);
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        Controls.Add(layout);
+    }
+
+    private static (Label value, Panel card) AddStatCard(Panel parent, string icon, string value, string subtitle, int index)
+    {
+        var card = new Panel
+        {
+            BackColor = CardBg,
+            Size = new Size(180, 80),
+            Tag = index
+        };
+        card.Paint += (s, e) =>
+        {
+            var rect = card.ClientRectangle;
+            rect.Inflate(-1, -1);
+            using var pen = new Pen(Color.FromArgb(220, 225, 230), 1);
+            e.Graphics.DrawRectangle(pen, rect);
+        };
+
+        var lblIcon = new Label
+        {
+            Text = icon,
+            Font = new Font("Segoe UI", 14),
+            Location = new Point(12, 12),
+            AutoSize = true
+        };
+
+        var lblValue = new Label
+        {
+            Text = value,
+            Font = new Font("Segoe UI Semibold", 20),
+            ForeColor = AccentBlue,
+            Location = new Point(42, 6),
+            AutoSize = true
+        };
+
+        var lblSubtitle = new Label
+        {
+            Text = subtitle,
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = SubtitleColor,
+            Location = new Point(12, 54),
+            AutoSize = true
+        };
+
+        card.Controls.AddRange(new Control[] { lblIcon, lblValue, lblSubtitle });
+        parent.Controls.Add(card);
+        return (lblValue, card);
+    }
+
+    private static void LayoutStatCards(Panel parent)
+    {
+        int count = parent.Controls.Count;
+        if (count == 0) return;
+        int availW = parent.ClientSize.Width;
+        int spacing = 12;
+        int cardW = (availW - spacing * (count - 1)) / count;
+        cardW = Math.Max(cardW, 120);
+
+        int x = 0;
+        foreach (Control c in parent.Controls)
+        {
+            c.Location = new Point(x, 4);
+            c.Size = new Size(cardW, 80);
+            x += cardW + spacing;
+        }
+    }
+
+    private void AddQuickAction(string text, Action onClick)
+    {
+        var btn = new Button
+        {
+            Text = text,
+            Font = new Font("Segoe UI", 9.5f),
+            ForeColor = AccentBlue,
+            BackColor = CardBg,
+            FlatStyle = FlatStyle.Flat,
+            AutoSize = true,
+            Padding = new Padding(12, 6, 12, 6),
+            Margin = new Padding(0, 0, 8, 0),
+            Cursor = Cursors.Hand
+        };
+        btn.FlatAppearance.BorderColor = Color.FromArgb(200, 210, 220);
+        btn.Click += (_, _) => onClick();
+        _quickActions.Controls.Add(btn);
+    }
+
+    public void LoadData(AdvisorRepository repo)
+    {
+        try
+        {
+            var stats = repo.GetDashboardStats();
+            _valAdvisors.Text = stats.TotalAdvisors.ToString("N0");
+            _valFirms.Text = stats.TotalFirms.ToString("N0");
+            _valFavorites.Text = stats.Favorites.ToString("N0");
+            _valCrm.Text = stats.InCrm.ToString("N0");
+            _valDisclosures.Text = stats.WithDisclosures.ToString("N0");
+            _valFavsNoCrm.Text = stats.FavsNotInCrm.ToString("N0");
+            _valUpdatedToday.Text = stats.UpdatedToday.ToString("N0");
+
+            _lblRefresh.Text = $"As of {DateTime.Now:g}";
+
+            // Top firms by AUM
+            var topFirms = repo.GetTopMaFirms(10);
+            _valMaGradeA.Text = topFirms.Count.ToString("N0");
+
+            _topFirmsListView.BeginUpdate();
+            _topFirmsListView.Items.Clear();
+            for (int i = 0; i < topFirms.Count; i++)
+            {
+                var firm = topFirms[i];
+                var item = new ListViewItem((i + 1).ToString());
+                item.SubItems.Add(firm.Name);
+                item.SubItems.Add(firm.State ?? "");
+                item.SubItems.Add(firm.RegulatoryAum.HasValue
+                    ? FormatHelpers.FormatAum(firm.RegulatoryAum.Value)
+                    : "");
+                item.SubItems.Add(firm.NumberOfAdvisors?.ToString() ?? "");
+                item.SubItems.Add(firm.RecordType ?? "");
+                item.SubItems.Add(firm.RegistrationStatus ?? "");
+                item.Tag = firm;
+                _topFirmsListView.Items.Add(item);
+            }
+            _topFirmsListView.EndUpdate();
+        }
+        catch
+        {
+            _lblRefresh.Text = "Error loading stats";
+        }
+    }
+
+    private void OnFirmDoubleClick(object? sender, EventArgs e)
+    {
+        if (_topFirmsListView.SelectedItems.Count == 0) return;
+        if (_topFirmsListView.SelectedItems[0].Tag is Firm firm)
+            FirmSelected?.Invoke(this, firm);
+    }
+}

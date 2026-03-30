@@ -27,6 +27,7 @@ public class AdvisorDetailCard : UserControl
     private ListView _lstDisclosures = null!;
     private ListView _lstQualifications = null!;
     private ListView _lstRegistrations = null!;
+    private Panel _firmDetailsPanel = null!;
 
     // Action buttons
     private Button _btnExclude = null!;
@@ -35,6 +36,8 @@ public class AdvisorDetailCard : UserControl
     private Button _btnRefresh = null!;
     private Button _btnAddToList = null!;
     private Button _btnFavorite = null!;
+    private Button _btnFindEmail = null!;
+    private Button _btnWatch = null!;
 
     public event EventHandler<Advisor>? ExcludeRequested;
     public event EventHandler<Advisor>? RestoreRequested;
@@ -42,7 +45,9 @@ public class AdvisorDetailCard : UserControl
     public event EventHandler<Advisor>? RefreshRequested;
     public event EventHandler<Advisor>? AddToListRequested;
     public event EventHandler<Advisor>? FavoriteRequested;
+    public event EventHandler<Advisor>? FindEmailRequested;
     public event EventHandler<string>? FirmNavigationRequested;
+    public event EventHandler<Advisor>? WatchToggleRequested;
 
     public AdvisorDetailCard()
     {
@@ -73,19 +78,29 @@ public class AdvisorDetailCard : UserControl
         mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // buttons
 
         // ── Header ─────────────────────────────────────────────────────
-        var header = new Panel
+        // TableLayoutPanel with AutoSize rows so the header grows with content
+        // rather than clipping badges when the name wraps or the window is small.
+        var headerLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(0, 0, 0, 12),
-            Height = 104
+            ColumnCount = 1,
+            RowCount = 4,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(0, 0, 0, 12)
         };
+        headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        headerLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // name
+        headerLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // crd
+        headerLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // profile links
+        headerLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // badges
 
         _lblName = new Label
         {
             Text = "Select an advisor",
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
             AutoSize = true,
-            Location = new Point(0, 0),
+            MaximumSize = new Size(500, 0),
             ForeColor = Color.FromArgb(30, 30, 80)
         };
 
@@ -94,7 +109,6 @@ public class AdvisorDetailCard : UserControl
             Text = "",
             Font = new Font("Segoe UI", 9),
             AutoSize = true,
-            Location = new Point(0, 32),
             ForeColor = Color.Gray
         };
 
@@ -103,7 +117,6 @@ public class AdvisorDetailCard : UserControl
             Text = "",
             Font = new Font("Segoe UI", 8.5f),
             AutoSize = true,
-            Location = new Point(0, 50),
             Visible = false
         };
         _lnkProfiles.LinkClicked += (s, e) =>
@@ -118,7 +131,6 @@ public class AdvisorDetailCard : UserControl
         var badgePanel = new FlowLayoutPanel
         {
             AutoSize = true,
-            Location = new Point(0, 68),
             FlowDirection = FlowDirection.LeftToRight
         };
 
@@ -130,9 +142,27 @@ public class AdvisorDetailCard : UserControl
         _lblBcScopeBadge = MakeBadge("", Color.FromArgb(50, 100, 160));
         _lblIaScopeBadge = MakeBadge("", Color.FromArgb(20, 120, 100));
 
-        badgePanel.Controls.AddRange(new Control[] { _lblSourceBadge, _lblRecordTypeBadge, _lblStatusBadge, _lblBcScopeBadge, _lblIaScopeBadge, _lblCrmBadge, _lblExcludedBadge });
-        header.Controls.AddRange(new Control[] { _lblName, _lblCrd, _lnkProfiles, badgePanel });
-        mainLayout.Controls.Add(header, 0, 0);
+        _btnWatch = new Button
+        {
+            Text = "Watch",
+            AutoSize = true,
+            Height = 22,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(200, 190, 50),
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 8, FontStyle.Bold),
+            Padding = new Padding(6, 0, 6, 0),
+            Enabled = false
+        };
+        _btnWatch.FlatAppearance.BorderSize = 0;
+        _btnWatch.Click += (_, _) => { if (_advisor != null) WatchToggleRequested?.Invoke(this, _advisor); };
+
+        badgePanel.Controls.AddRange(new Control[] { _lblSourceBadge, _lblRecordTypeBadge, _lblStatusBadge, _lblBcScopeBadge, _lblIaScopeBadge, _lblCrmBadge, _lblExcludedBadge, _btnWatch });
+        headerLayout.Controls.Add(_lblName, 0, 0);
+        headerLayout.Controls.Add(_lblCrd, 0, 1);
+        headerLayout.Controls.Add(_lnkProfiles, 0, 2);
+        headerLayout.Controls.Add(badgePanel, 0, 3);
+        mainLayout.Controls.Add(headerLayout, 0, 0);
 
         // ── Info Grid ─────────────────────────────────────────────────
         _infoGrid = new TableLayoutPanel
@@ -215,13 +245,19 @@ public class AdvisorDetailCard : UserControl
             GridLines = true,
             Font = new Font("Segoe UI", 9)
         };
-        _lstRegistrations.Columns.Add("State", 80);
+        _lstRegistrations.Columns.Add("Type", 60);
+        _lstRegistrations.Columns.Add("State / Organization", -2);
         _lstRegistrations.Columns.Add("Category", 80);
         _lstRegistrations.Columns.Add("Status", 100);
-        _lstRegistrations.Columns.Add("Date", -2);
+        _lstRegistrations.Columns.Add("Date", 90);
         regPage.Controls.Add(_lstRegistrations);
 
-        _tabs.TabPages.AddRange(new[] { empPage, discPage, qualPage, regPage });
+        // Current Firm tab
+        var firmPage = new TabPage("Current Firm");
+        _firmDetailsPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12), AutoScroll = true };
+        firmPage.Controls.Add(_firmDetailsPanel);
+
+        _tabs.TabPages.AddRange(new[] { empPage, discPage, qualPage, regPage, firmPage });
         mainLayout.Controls.Add(_tabs, 0, 2);
 
         // ── Action Buttons ────────────────────────────────────────────
@@ -239,6 +275,7 @@ public class AdvisorDetailCard : UserControl
         _btnFavorite = MakeActionButton("☆ Favorite", Color.FromArgb(180, 130, 0));
         _btnExclude = MakeActionButton("Exclude", Color.FromArgb(200, 80, 60));
         _btnRestore = MakeActionButton("Restore", Color.FromArgb(60, 140, 70));
+        _btnFindEmail = MakeActionButton("Find Email", Color.FromArgb(0, 120, 160));
 
         _btnRefresh.Click += (_, _) => { if (_advisor != null) RefreshRequested?.Invoke(this, _advisor); };
         _btnImportCrm.Click += (_, _) => { if (_advisor != null) ImportCrmRequested?.Invoke(this, _advisor); };
@@ -246,8 +283,9 @@ public class AdvisorDetailCard : UserControl
         _btnFavorite.Click += (_, _) => { if (_advisor != null) FavoriteRequested?.Invoke(this, _advisor); };
         _btnExclude.Click += (_, _) => { if (_advisor != null) ExcludeRequested?.Invoke(this, _advisor); };
         _btnRestore.Click += (_, _) => { if (_advisor != null) RestoreRequested?.Invoke(this, _advisor); };
+        _btnFindEmail.Click += (_, _) => { if (_advisor != null) FindEmailRequested?.Invoke(this, _advisor); };
 
-        btnPanel.Controls.AddRange(new Control[] { _btnRefresh, _btnImportCrm, _btnAddToList, _btnFavorite, _btnExclude, _btnRestore });
+        btnPanel.Controls.AddRange(new Control[] { _btnRefresh, _btnImportCrm, _btnAddToList, _btnFavorite, _btnExclude, _btnRestore, _btnFindEmail });
         mainLayout.Controls.Add(btnPanel, 0, 3);
 
         outer.Controls.Add(mainLayout);
@@ -274,6 +312,11 @@ public class AdvisorDetailCard : UserControl
         _btnFavorite.Enabled = false;
         _btnExclude.Enabled = false;
         _btnRestore.Enabled = false;
+        _btnFindEmail.Enabled = false;
+        _btnWatch.Enabled = false;
+        _btnWatch.Text = "Watch";
+        _firmDetailsPanel.Controls.Clear();
+        _tabs.TabPages[4].Text = "Current Firm";
     }
 
     public void ShowAdvisor(Advisor advisor)
@@ -293,6 +336,8 @@ public class AdvisorDetailCard : UserControl
             linkParts.Add($"BrokerCheck|https://brokercheck.finra.org/individual/summary/{advisor.CrdNumber}");
         if (!string.IsNullOrEmpty(advisor.IapdNumber))
             linkParts.Add($"SEC IAPD|https://adviserinfo.sec.gov/individual/summary/{advisor.IapdNumber}");
+        if (!string.IsNullOrEmpty(advisor.BrokerCheckReportPdfUrl))
+            linkParts.Add($"📄 BrokerCheck PDF|{advisor.BrokerCheckReportPdfUrl}");
         if (linkParts.Count > 0)
         {
             var linkText = string.Join("   ", linkParts.Select(p => p.Split('|')[0]));
@@ -439,12 +484,23 @@ public class AdvisorDetailCard : UserControl
         _lstRegistrations.Items.Clear();
         if (advisor.Registrations.Count > 0)
         {
-            foreach (var reg in advisor.Registrations)
+            // SRO registrations first, then state registrations sorted alphabetically
+            var sroRegs = advisor.Registrations
+                .Where(r => r.RegistrationType == "SRO")
+                .OrderBy(r => r.SroName);
+            var stateRegs = advisor.Registrations
+                .Where(r => r.RegistrationType != "SRO")
+                .OrderBy(r => r.StateCode);
+
+            foreach (var reg in sroRegs.Concat(stateRegs))
             {
-                var item = new ListViewItem(reg.StateCode);
+                bool isSro = reg.RegistrationType == "SRO";
+                var item = new ListViewItem(isSro ? "SRO" : "State");
+                item.SubItems.Add(isSro ? (reg.SroName ?? "") : reg.StateCode);
                 item.SubItems.Add(reg.RegistrationCategory ?? "");
                 item.SubItems.Add(reg.RegistrationStatus ?? "");
                 item.SubItems.Add(reg.StatusDate ?? "");
+                if (isSro) item.BackColor = Color.FromArgb(240, 248, 255);
                 _lstRegistrations.Items.Add(item);
             }
         }
@@ -453,7 +509,8 @@ public class AdvisorDetailCard : UserControl
             // Fall back to RegAuthorities comma-joined state codes for older records
             foreach (var state in advisor.RegAuthorities.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             {
-                var item = new ListViewItem(state);
+                var item = new ListViewItem("State");
+                item.SubItems.Add(state);
                 item.SubItems.Add("");
                 item.SubItems.Add("");
                 item.SubItems.Add("");
@@ -476,6 +533,14 @@ public class AdvisorDetailCard : UserControl
         _btnExclude.Enabled = !advisor.IsExcluded;
         _btnRestore.Enabled = advisor.IsExcluded;
         _btnImportCrm.Text = advisor.IsImportedToCrm ? "Re-import to Wealthbox" : "Import to Wealthbox";
+        // Show "Find Email" only when email is not yet known
+        _btnFindEmail.Enabled = string.IsNullOrEmpty(advisor.Email);
+
+        _btnWatch.Enabled = true;
+        _btnWatch.Text = advisor.IsWatched ? "Watching ★" : "Watch";
+        _btnWatch.BackColor = advisor.IsWatched
+            ? Color.FromArgb(255, 200, 0)
+            : Color.FromArgb(200, 190, 50);
     }
 
     private void AddInfoRow(string label1, string value1, string label2, string value2)
@@ -572,5 +637,82 @@ public class AdvisorDetailCard : UserControl
         };
         btn.FlatAppearance.BorderSize = 0;
         return btn;
+    }
+
+    /// <summary>
+    /// Populates the Current Firm tab with data from the advisor's current firm record.
+    /// Call this after <see cref="ShowAdvisor"/> whenever the firm can be looked up.
+    /// Pass null to clear the tab.
+    /// </summary>
+    public void SetFirm(Firm? firm)
+    {
+        _firmDetailsPanel.Controls.Clear();
+
+        if (firm == null)
+        {
+            _tabs.TabPages[4].Text = "Current Firm";
+            return;
+        }
+
+        _tabs.TabPages[4].Text = "Current Firm ✓";
+
+        var layout = new TableLayoutPanel
+        {
+            ColumnCount = 4,
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            Padding = new Padding(0, 0, 0, 8)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+
+        void AddFirmRow(string lbl1, string val1, string lbl2, string val2)
+        {
+            int row = layout.RowCount++;
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(MakeInfoLabel(lbl1), 0, row);
+            layout.Controls.Add(MakeInfoValue(val1), 1, row);
+            layout.Controls.Add(MakeInfoLabel(lbl2), 2, row);
+            layout.Controls.Add(MakeInfoValue(val2), 3, row);
+        }
+
+        // Firm name as bold header
+        var lblFirmName = new Label
+        {
+            Text = firm.Name,
+            Font = new Font("Segoe UI", 12, FontStyle.Bold),
+            AutoSize = true,
+            ForeColor = Color.FromArgb(30, 30, 80),
+            Padding = new Padding(0, 0, 0, 8)
+        };
+        layout.RowCount++;
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.Controls.Add(lblFirmName, 0, 0);
+        layout.SetColumnSpan(lblFirmName, 4);
+
+        var location = !string.IsNullOrWhiteSpace(firm.City)
+            ? $"{firm.City}{(!string.IsNullOrWhiteSpace(firm.State) ? ", " + firm.State : "")}"
+            : (firm.State ?? "—");
+
+        AddFirmRow("Firm CRD:", firm.CrdNumber ?? "—", "Status:", firm.RegistrationStatus ?? "—");
+        AddFirmRow("City, State:", location, "Record Type:", firm.RecordType ?? "—");
+        AddFirmRow("Reg. AUM:", FormatAum(firm.RegulatoryAum), "Advisors:", firm.NumberOfAdvisors.HasValue ? firm.NumberOfAdvisors.Value.ToString("N0") : "—");
+        AddFirmRow("Broker Protocol:", firm.BrokerProtocolMember ? "Yes" : "No", "Business Type:", firm.BusinessType ?? "—");
+
+        if (!string.IsNullOrWhiteSpace(firm.Website))
+            AddFirmRow("Website:", firm.Website, "", "");
+
+        _firmDetailsPanel.Controls.Add(layout);
+    }
+
+    private static string FormatAum(decimal? aum)
+    {
+        if (!aum.HasValue || aum.Value == 0) return "—";
+        if (aum.Value >= 1_000_000_000m) return $"${aum.Value / 1_000_000_000m:F1}B";
+        if (aum.Value >= 1_000_000m) return $"${aum.Value / 1_000_000m:F1}M";
+        if (aum.Value >= 1_000m) return $"${aum.Value / 1_000m:F0}K";
+        return $"${aum.Value:F0}";
     }
 }

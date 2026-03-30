@@ -17,6 +17,9 @@ public class DashboardPanel : UserControl
 
     public event EventHandler? RefreshDataRequested;
     public event EventHandler? DataQualityCheckRequested;
+    public event EventHandler? BrowseAdvisorsRequested;
+    public event EventHandler? BrowseFirmsRequested;
+    public event EventHandler? BrowseReportsRequested;
 
     public DashboardPanel(AdvisorRepository repo)
     {
@@ -80,7 +83,7 @@ public class DashboardPanel : UserControl
         statsGrid.Controls.Add(MakeStatCard("With Disclosures", _lblDisclosurePct, Color.FromArgb(200, 100, 0)), 2, 0);
         statsGrid.Controls.Add(MakeStatCard("Last Sync", _lblLastSync, Color.FromArgb(80, 80, 180)), 3, 0);
         statsGrid.Controls.Add(MakeStatCard("FINRA Advisors", _lblFinraCount, Color.FromArgb(70, 130, 180)), 0, 1);
-        statsGrid.Controls.Add(MakeStatCard("SEC Advisors", _lblSecCount, Color.FromArgb(60, 160, 100)), 1, 1);
+        statsGrid.Controls.Add(MakeStatCard("Inv. Advisors", _lblSecCount, Color.FromArgb(60, 160, 100)), 1, 1);
         statsGrid.Controls.Add(MakeStatCard("Favorites", _lblFavorites, Color.FromArgb(180, 130, 0)), 2, 1);
         statsGrid.Controls.Add(MakeStatCard("In CRM", _lblInCrm, Color.FromArgb(130, 80, 170)), 3, 1);
 
@@ -124,8 +127,59 @@ public class DashboardPanel : UserControl
         btnQuality.FlatAppearance.BorderSize = 0;
         btnQuality.Click += (_, _) => DataQualityCheckRequested?.Invoke(this, EventArgs.Empty);
 
+        var btnBrowseAdvisors = new Button
+        {
+            Text = "Browse Advisors →",
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(0, 100, 200),
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("Segoe UI", 10),
+            Height = 36,
+            AutoSize = true,
+            Padding = new Padding(12, 0, 12, 0),
+            Margin = new Padding(0, 0, 8, 0)
+        };
+        btnBrowseAdvisors.FlatAppearance.BorderColor = Color.FromArgb(0, 100, 200);
+        btnBrowseAdvisors.FlatAppearance.BorderSize = 1;
+        btnBrowseAdvisors.Click += (_, _) => BrowseAdvisorsRequested?.Invoke(this, EventArgs.Empty);
+
+        var btnBrowseFirms = new Button
+        {
+            Text = "Browse Firms →",
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(0, 140, 100),
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("Segoe UI", 10),
+            Height = 36,
+            AutoSize = true,
+            Padding = new Padding(12, 0, 12, 0),
+            Margin = new Padding(0, 0, 8, 0)
+        };
+        btnBrowseFirms.FlatAppearance.BorderColor = Color.FromArgb(0, 140, 100);
+        btnBrowseFirms.FlatAppearance.BorderSize = 1;
+        btnBrowseFirms.Click += (_, _) => BrowseFirmsRequested?.Invoke(this, EventArgs.Empty);
+
+        var btnBrowseReports = new Button
+        {
+            Text = "📊 View Reports →",
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(60, 160, 100),
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("Segoe UI", 10),
+            Height = 36,
+            AutoSize = true,
+            Padding = new Padding(12, 0, 12, 0),
+            Margin = new Padding(0, 0, 8, 0)
+        };
+        btnBrowseReports.FlatAppearance.BorderColor = Color.FromArgb(60, 160, 100);
+        btnBrowseReports.FlatAppearance.BorderSize = 1;
+        btnBrowseReports.Click += (_, _) => BrowseReportsRequested?.Invoke(this, EventArgs.Empty);
+
         btnPanel.Controls.Add(btnRefresh);
         btnPanel.Controls.Add(btnQuality);
+        btnPanel.Controls.Add(btnBrowseAdvisors);
+        btnPanel.Controls.Add(btnBrowseFirms);
+        btnPanel.Controls.Add(btnBrowseReports);
         outer.Controls.Add(btnPanel, 0, 2);
 
         this.Controls.Add(outer);

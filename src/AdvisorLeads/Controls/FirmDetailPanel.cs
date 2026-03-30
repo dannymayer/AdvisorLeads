@@ -1,3 +1,4 @@
+using AdvisorLeads.Data;
 using AdvisorLeads.Models;
 using AdvisorLeads.Services;
 
@@ -6,6 +7,7 @@ namespace AdvisorLeads.Controls;
 public class FirmDetailPanel : UserControl
 {
     private Firm? _firm;
+    private AdvisorRepository? _repo;
 
     // EDGAR services (set via SetServices)
     private AumAnalyticsService? _aumAnalytics;
@@ -21,16 +23,20 @@ public class FirmDetailPanel : UserControl
     private Label _lblTypeBadge = null!;
     private Label _lblStatusBadge = null!;
     private Label _lblBpBadge = null!;
+    private Label _lblBpUpdated = null!;
     private TabControl _tabs = null!;
     private TableLayoutPanel _infoGrid = null!;
     private ListView _filingsListView = null!;
     private ListView _eventsListView = null!;
     private ListView _ownershipListView = null!;
+    private ListView _advisorsListView = null!;
     private TableLayoutPanel _aumGrid = null!;
     private TableLayoutPanel _scoreGrid = null!;
     private Button _btnViewAdvisors = null!;
+    private Button _btnWatchFirm = null!;
 
     public event EventHandler<string>? AdvisorNavigationRequested;
+    public event EventHandler<Firm>? WatchFirmToggleRequested;
 
     public FirmDetailPanel()
     {
@@ -51,6 +57,11 @@ public class FirmDetailPanel : UserControl
         _edgarSubmissions = edgarSubmissions;
         _edgarSearch = edgarSearch;
         _maScoring = maScoring;
+    }
+
+    public void SetAdvisorRepository(AdvisorRepository repo)
+    {
+        _repo = repo;
     }
 
     private void BuildUI()
@@ -116,14 +127,26 @@ public class FirmDetailPanel : UserControl
         };
 
         _lblSourceBadge = MakeBadge("SEC", Color.FromArgb(0, 120, 215));
-        _lblTypeBadge = MakeBadge("Investment Advisor", Color.FromArgb(0, 150, 100));
+        _lblTypeBadge = MakeBadge("Investment Adviser", Color.FromArgb(0, 150, 100));
         _lblStatusBadge = MakeBadge("", Color.Gray);
         _lblStatusBadge.Visible = false;
-        _lblBpBadge = MakeBadge("Broker Protocol ✓", Color.FromArgb(0, 100, 170));
+        _lblBpBadge = MakeBadge("✓ Broker Protocol Member", Color.FromArgb(0, 130, 80));
         _lblBpBadge.Visible = false;
 
         badgeFlow.Controls.AddRange(new Control[] { _lblSourceBadge, _lblTypeBadge, _lblStatusBadge, _lblBpBadge });
         header.Controls.Add(badgeFlow);
+
+        _lblBpUpdated = new Label
+        {
+            Text = "",
+            Font = new Font("Segoe UI", 8),
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            ForeColor = Color.FromArgb(0, 130, 80),
+            Padding = new Padding(2, 0, 0, 4),
+            Visible = false
+        };
+        header.Controls.Add(_lblBpUpdated);
 
         mainLayout.Controls.Add(header, 0, 0);
 
@@ -154,6 +177,25 @@ public class FirmDetailPanel : UserControl
                 AdvisorNavigationRequested?.Invoke(this, _firm.CrdNumber);
         };
         btnRow.Controls.Add(_btnViewAdvisors);
+
+        _btnWatchFirm = new Button
+        {
+            Text = "Watch Firm",
+            BackColor = Color.FromArgb(200, 190, 50),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Font = new Font("Segoe UI", 9),
+            Height = 28,
+            AutoSize = true,
+            Padding = new Padding(10, 0, 10, 0),
+            Enabled = false
+        };
+        _btnWatchFirm.FlatAppearance.BorderSize = 0;
+        _btnWatchFirm.Click += (_, _) =>
+        {
+            if (_firm != null) WatchFirmToggleRequested?.Invoke(this, _firm);
+        };
+        btnRow.Controls.Add(_btnWatchFirm);
         mainLayout.Controls.Add(btnRow, 0, 1);
 
         // ── Tabbed content ──
@@ -243,6 +285,25 @@ public class FirmDetailPanel : UserControl
         _ownershipListView.Columns.Add("Filing Date", 85);
         tabOwnership.Controls.Add(_ownershipListView);
 
+        // Tab: Advisors
+        var tabAdvisors = new TabPage("Advisors");
+        _advisorsListView = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            Font = new Font("Segoe UI", 8.5f),
+            BorderStyle = BorderStyle.None
+        };
+        _advisorsListView.Columns.Add("Name", 160);
+        _advisorsListView.Columns.Add("CRD", 70);
+        _advisorsListView.Columns.Add("State", 45);
+        _advisorsListView.Columns.Add("Type", 110);
+        _advisorsListView.Columns.Add("Disclosures", 90);
+        _advisorsListView.Columns.Add("Status", -2);
+        tabAdvisors.Controls.Add(_advisorsListView);
+
         // Tab: M&A Score
         var tabScore = new TabPage("M&A Score");
         _scoreGrid = new TableLayoutPanel
@@ -263,6 +324,7 @@ public class FirmDetailPanel : UserControl
         _tabs.TabPages.Add(tabFilings);
         _tabs.TabPages.Add(tabEvents);
         _tabs.TabPages.Add(tabOwnership);
+        _tabs.TabPages.Add(tabAdvisors);
         _tabs.TabPages.Add(tabScore);
 
         mainLayout.Controls.Add(_tabs, 0, 2);
@@ -277,7 +339,10 @@ public class FirmDetailPanel : UserControl
         _lblCrd.Text = "";
         _lblStatusBadge.Visible = false;
         _lblBpBadge.Visible = false;
+        _lblBpUpdated.Visible = false;
         _btnViewAdvisors.Enabled = false;
+        _btnWatchFirm.Enabled = false;
+        _btnWatchFirm.Text = "Watch Firm";
         _infoGrid.Controls.Clear();
         _infoGrid.RowStyles.Clear();
         _aumGrid.Controls.Clear();
@@ -285,6 +350,7 @@ public class FirmDetailPanel : UserControl
         _filingsListView.Items.Clear();
         _eventsListView.Items.Clear();
         _ownershipListView.Items.Clear();
+        _advisorsListView.Items.Clear();
         _scoreGrid.Controls.Clear();
         _scoreGrid.RowStyles.Clear();
     }
@@ -297,6 +363,12 @@ public class FirmDetailPanel : UserControl
         _lblTypeBadge.Text = firm.RecordType ?? "Investment Advisor";
         _lblSourceBadge.Text = firm.Source ?? "SEC";
         _btnViewAdvisors.Enabled = !string.IsNullOrEmpty(firm.CrdNumber);
+
+        _btnWatchFirm.Enabled = true;
+        _btnWatchFirm.Text = firm.IsWatched ? "Watching ★" : "Watch Firm";
+        _btnWatchFirm.BackColor = firm.IsWatched
+            ? Color.FromArgb(255, 200, 0)
+            : Color.FromArgb(200, 190, 50);
 
         if (!string.IsNullOrEmpty(firm.RegistrationStatus))
         {
@@ -312,12 +384,22 @@ public class FirmDetailPanel : UserControl
         }
 
         _lblBpBadge.Visible = firm.BrokerProtocolMember;
+        if (firm.BrokerProtocolMember && firm.BrokerProtocolUpdatedAt.HasValue)
+        {
+            _lblBpUpdated.Text = $"Last verified: {firm.BrokerProtocolUpdatedAt.Value.ToLocalTime():M/d/yyyy}";
+            _lblBpUpdated.Visible = true;
+        }
+        else
+        {
+            _lblBpUpdated.Visible = false;
+        }
 
         PopulateOverviewTab(firm);
         PopulateAumTab(firm);
         PopulateFilingsTab(firm);
         PopulateEventsTab(firm);
         PopulateOwnershipTab(firm);
+        PopulateAdvisorsTab(firm);
         PopulateMaScoreTab(firm);
     }
 
@@ -566,6 +648,40 @@ public class FirmDetailPanel : UserControl
             _ownershipListView.Items.Add(item);
         }
         _ownershipListView.EndUpdate();
+    }
+
+    private void PopulateAdvisorsTab(Firm firm)
+    {
+        _advisorsListView.Items.Clear();
+
+        if (_repo == null || string.IsNullOrEmpty(firm.CrdNumber))
+        {
+            var placeholder = new ListViewItem("No advisor repository connected");
+            _advisorsListView.Items.Add(placeholder);
+            return;
+        }
+
+        var advisors = _repo.GetAdvisorsByFirmCrd(firm.CrdNumber, limit: 200);
+        if (advisors.Count == 0)
+        {
+            var placeholder = new ListViewItem("No advisors found for this firm");
+            _advisorsListView.Items.Add(placeholder);
+            return;
+        }
+
+        _advisorsListView.BeginUpdate();
+        foreach (var advisor in advisors)
+        {
+            var item = new ListViewItem(advisor.FullName);
+            item.SubItems.Add(advisor.CrdNumber ?? "");
+            item.SubItems.Add(advisor.State ?? "");
+            item.SubItems.Add(advisor.RecordType ?? "");
+            item.SubItems.Add(advisor.HasDisclosures ? $"Yes ({advisor.DisclosureCount})" : "No");
+            item.SubItems.Add(advisor.RegistrationStatus ?? "");
+            item.Tag = advisor;
+            _advisorsListView.Items.Add(item);
+        }
+        _advisorsListView.EndUpdate();
     }
 
     private void PopulateMaScoreTab(Firm firm)
