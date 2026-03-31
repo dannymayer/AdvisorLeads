@@ -11,6 +11,7 @@ public class MainForm : Form
 {
     private const int MainSplitDefaultDistance = 220;
     private const int ContentSplitDefaultDistance = 420;
+    private const int AdvisorPageSize = 100;
 
     // Services
     private AdvisorRepository _repo = null!;
@@ -74,6 +75,10 @@ public class MainForm : Form
     private List<Firm> _currentFirms = new();
     private Firm? _selectedFirm;
     private int _totalAdvisorCount = 0;
+    private int _currentPage = 1;
+    private Panel _paginationBar = null!;
+    private Label _lblPageInfo = null!;
+    private Button _btnLoadMore = null!;
     private int _mainSplitSavedDistance = MainSplitDefaultDistance;
     private DateTime? _lastSyncTime;
     private string? _pendingFirmCrd;
@@ -88,7 +93,6 @@ public class MainForm : Form
     {
         ResolveServices(serviceProvider);
         BuildUI();
-        LoadAdvisors();
         LoadFilterOptions();
         this.Shown += OnFormShown;
     }
@@ -186,6 +190,7 @@ public class MainForm : Form
         // Advisor card panel (individuals)
         BuildAdvisorCardPanel();
         _contentSplit.Panel1.Controls.Add(_advisorCardPanel);
+        _contentSplit.Panel1.Controls.Add(_paginationBar);
 
         // Detail card (individuals)
         _detailCard = new AdvisorDetailCard { Dock = DockStyle.Fill };
@@ -325,7 +330,18 @@ public class MainForm : Form
                     LoadAdvisors();
                 }
                 else if (selected == _tabFirms)
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (_firmContentSplit.SplitterDistance < ContentSplitDefaultDistance)
+                        {
+                            int preferred = Math.Max(ContentSplitDefaultDistance,
+                                                     (int)(_firmContentSplit.Width * 0.45));
+                            SetSafeSplitterDistance(_firmContentSplit, preferred);
+                        }
+                    }));
                     LoadFirms();
+                }
                 else if (_mainTabs.SelectedIndex == 4)
                     _analyticsPanel?.LoadDefaultView();
                 else if (selected == _tabAlerts)
@@ -534,6 +550,43 @@ public class MainForm : Form
 
         _advisorCardPanel.ContextMenuStrip = contextMenu;
         _advisorCardPanel.Resize += (_, _) => ResizeAdvisorCards();
+
+        // Pagination bar (docked at bottom of the card panel's parent)
+        _paginationBar = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 36,
+            BackColor = Color.FromArgb(245, 247, 252),
+            Padding = new Padding(8, 4, 8, 4)
+        };
+        _lblPageInfo = new Label
+        {
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9),
+            ForeColor = Color.FromArgb(100, 110, 130),
+            Location = new Point(8, 9)
+        };
+        _btnLoadMore = new Button
+        {
+            Text = "Load More",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(0, 100, 200),
+            Padding = new Padding(12, 2, 12, 2),
+            Visible = false
+        };
+        _btnLoadMore.FlatAppearance.BorderColor = Color.FromArgb(0, 100, 200);
+        _btnLoadMore.Click += (_, _) => LoadMoreAdvisors();
+        _paginationBar.Controls.Add(_btnLoadMore);
+        _paginationBar.Controls.Add(_lblPageInfo);
+        _paginationBar.Resize += (_, _) =>
+        {
+            _btnLoadMore.Location = new Point(
+                _paginationBar.Width - _btnLoadMore.Width - 12,
+                (_paginationBar.Height - _btnLoadMore.Height) / 2);
+        };
     }
 
     private ContextMenuStrip BuildCardContextMenu()
@@ -711,6 +764,7 @@ public class MainForm : Form
         _searchCts?.Cancel();
         var cts = new CancellationTokenSource();
         _searchCts = cts;
+        _currentPage = 1;
 
         SetStatus("Loading...");
         _filterPanel.Enabled = false;
@@ -718,7 +772,7 @@ public class MainForm : Form
         {
             var filter = _filterPanel.GetFilter();
             filter.PageNumber = 1;
-            filter.PageSize = 5000;
+            filter.PageSize = AdvisorPageSize;
 
             List<Advisor> advisors = null!;
             int total = 0;
@@ -736,6 +790,7 @@ public class MainForm : Form
             _totalAdvisorCount = total;
 
             RenderAdvisorCards();
+            UpdatePagination();
             UpdateAdvisorCountLabel(filter);
             SetStatus("Ready");
         }
@@ -752,6 +807,54 @@ public class MainForm : Form
         {
             _filterPanel.Enabled = true;
         }
+    }
+
+    private async void LoadMoreAdvisors()
+    {
+        _currentPage++;
+        _btnLoadMore.Enabled = false;
+        _btnLoadMore.Text = "Loading...";
+
+        try
+        {
+            var filter = _filterPanel.GetFilter();
+            filter.PageNumber = _currentPage;
+            filter.PageSize = AdvisorPageSize;
+
+            List<Advisor> moreAdvisors = null!;
+            await Task.Run(() =>
+            {
+                var result = _repo.GetAdvisorsWithCount(filter);
+                moreAdvisors = result.Advisors;
+            });
+
+            _currentAdvisors.AddRange(moreAdvisors);
+            RenderAdvisorCards();
+            UpdatePagination();
+            UpdateAdvisorCountLabel(filter);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Error loading more: {ex.Message}");
+            _currentPage--;
+        }
+        finally
+        {
+            _btnLoadMore.Enabled = true;
+            _btnLoadMore.Text = "Load More";
+        }
+    }
+
+    private void UpdatePagination()
+    {
+        int showing = _currentAdvisors.Count;
+        int total = _totalAdvisorCount;
+        bool hasMore = showing < total;
+
+        _lblPageInfo.Text = showing == total
+            ? $"Showing all {total:N0} advisors"
+            : $"Showing {showing:N0} of {total:N0} advisors";
+        _btnLoadMore.Visible = hasMore;
     }
 
     private void UpdateAdvisorCountLabel(SearchFilter filter)
