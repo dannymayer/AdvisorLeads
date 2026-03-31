@@ -59,6 +59,7 @@ public class DataSyncService : IDataSyncService
         var results = new List<Advisor>();
         int newCount = 0;
         int updatedCount = 0;
+        int errorCount = 0;
 
         foreach (var advisor in allAdvisors.Values)
         {
@@ -74,14 +75,27 @@ public class DataSyncService : IDataSyncService
                 }
             }
 
-            _repo.UpsertAdvisor(advisor, out bool wasNew);
-            results.Add(advisor);
+            try
+            {
+                _repo.UpsertAdvisor(advisor, out bool wasNew);
+                results.Add(advisor);
 
-            if (wasNew) newCount++;
-            else updatedCount++;
+                if (wasNew) newCount++;
+                else updatedCount++;
+            }
+            catch (Exception ex)
+            {
+                errorCount++;
+                string crd = advisor.CrdNumber ?? "unknown";
+                string inner = ex.InnerException?.Message ?? ex.Message;
+                progress?.Report($"⚠ Skipped CRD {crd}: {inner}");
+            }
         }
 
-        progress?.Report($"Sync complete. {newCount} new, {updatedCount} updated.");
+        string summary = $"Sync complete. {newCount} new, {updatedCount} updated.";
+        if (errorCount > 0)
+            summary += $" ({errorCount} skipped due to errors)";
+        progress?.Report(summary);
         return new SyncResult(results, newCount, updatedCount);
     }
 

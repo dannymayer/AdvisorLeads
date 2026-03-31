@@ -25,6 +25,7 @@ public class BackgroundDataService : IBackgroundDataService
     private readonly EdgarSubmissionsService _edgarSubmissions;
     private readonly EdgarSearchService _edgarSearch;
     private readonly FormAdvHistoricalService _formAdvHistorical;
+    private AlertRepository? _alertRepo;
     private WatchListMonitorService? _watchListMonitor;
     private Func<string, string?>? _loadSetting;
     private Action<string, string>? _saveSetting;
@@ -64,6 +65,8 @@ public class BackgroundDataService : IBackgroundDataService
         _edgarSearch = edgarSearch;
         _formAdvHistorical = formAdvHistorical;
     }
+
+    public void SetAlertRepository(AlertRepository alertRepo) => _alertRepo = alertRepo;
 
     public void SetWatchListMonitorService(WatchListMonitorService s) => _watchListMonitor = s;
 
@@ -157,6 +160,14 @@ public class BackgroundDataService : IBackgroundDataService
         _repo.UpdateFirmAdvisorCounts();
         _repo.ClassifyRegistrationLevels();
         DataUpdated?.Invoke();
+
+        if (_alertRepo != null)
+        {
+            int unread = _alertRepo.GetUnreadCount();
+            if (unread > 0)
+                AlertsGenerated?.Invoke(unread);
+        }
+
         return totalSaved;
     }
 
@@ -258,6 +269,14 @@ public class BackgroundDataService : IBackgroundDataService
         }
 
         DataUpdated?.Invoke();
+
+        // Raise AlertsGenerated so the UI can refresh its alert badge
+        if (_alertRepo != null)
+        {
+            int unread = _alertRepo.GetUnreadCount();
+            if (unread > 0)
+                AlertsGenerated?.Invoke(unread);
+        }
     }
 
     /// <summary>

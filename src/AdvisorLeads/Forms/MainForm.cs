@@ -1144,7 +1144,8 @@ public class MainForm : Form
             }
             catch (Exception ex)
             {
-                if (!dlg.IsDisposed) dlg.FetchFailed(ex.Message);
+                string message = ex.InnerException?.Message ?? ex.Message;
+                if (!dlg.IsDisposed) dlg.FetchFailed(message);
             }
         };
         dlg.FormClosed += (_, _) => dlg.Dispose();

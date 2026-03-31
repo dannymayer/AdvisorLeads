@@ -78,6 +78,7 @@ public static class ApplicationServices
             secMonthly, changeDetection, aumAnalytics,
             iapd, brokerProtocol, edgarSubmissions, edgarSearch, formAdvHistorical);
         bgData.SetSettingAccessors(AppSettings.Load, AppSettings.Save);
+        bgData.SetAlertRepository(alertRepo);
 
         // Optional token-based services
         var wealthboxToken = AppSettings.Load("WealthboxToken") ?? string.Empty;

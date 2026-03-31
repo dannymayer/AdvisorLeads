@@ -93,7 +93,10 @@ public partial class AdvisorRepository
         if (!string.IsNullOrEmpty(incoming.CurrentFirmCrd))
             existing.CurrentFirmCrd = incoming.CurrentFirmCrd;
         if (incoming.CurrentFirmId != null)
-            existing.CurrentFirmId = incoming.CurrentFirmId;
+        {
+            bool firmExists = ctx.Firms.Any(f => f.Id == incoming.CurrentFirmId.Value);
+            existing.CurrentFirmId = firmExists ? incoming.CurrentFirmId : null;
+        }
         if (!string.IsNullOrEmpty(incoming.RegistrationStatus))
             existing.RegistrationStatus = incoming.RegistrationStatus;
         if (incoming.RegistrationDate.HasValue)
