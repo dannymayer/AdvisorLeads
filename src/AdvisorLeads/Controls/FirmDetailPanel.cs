@@ -19,6 +19,7 @@ public class FirmDetailPanel : UserControl
 
     private Label _lblName = null!;
     private Label _lblCrd = null!;
+    private LinkLabel _lnkProfiles = null!;
     private Label _lblSourceBadge = null!;
     private Label _lblTypeBadge = null!;
     private Label _lblStatusBadge = null!;
@@ -115,6 +116,25 @@ public class FirmDetailPanel : UserControl
             Padding = new Padding(2, 0, 0, 4)
         };
         header.Controls.Add(_lblCrd);
+
+        _lnkProfiles = new LinkLabel
+        {
+            Text = "",
+            Font = new Font("Segoe UI", 8.5f),
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            Visible = false,
+            Padding = new Padding(2, 0, 0, 4)
+        };
+        _lnkProfiles.LinkClicked += (s, e) =>
+        {
+            if (e.Link?.LinkData is string url)
+            {
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+                catch { }
+            }
+        };
+        header.Controls.Add(_lnkProfiles);
 
         var badgeFlow = new FlowLayoutPanel
         {
@@ -360,6 +380,34 @@ public class FirmDetailPanel : UserControl
         _firm = firm;
         _lblName.Text = firm.Name;
         _lblCrd.Text = $"CRD: {firm.CrdNumber}" + (string.IsNullOrEmpty(firm.SECNumber) ? "" : $"  |  SEC: {firm.SECNumber}");
+
+        // Profile links
+        _lnkProfiles.Links.Clear();
+        var linkParts = new List<string>();
+        if (!string.IsNullOrEmpty(firm.CrdNumber))
+            linkParts.Add($"BrokerCheck|https://brokercheck.finra.org/firm/summary/{firm.CrdNumber}");
+        if (!string.IsNullOrEmpty(firm.SECNumber))
+            linkParts.Add($"SEC IAPD|https://adviserinfo.sec.gov/firm/summary/{firm.CrdNumber}");
+        if (linkParts.Count > 0)
+        {
+            string sep = "   ";
+            string fullText = string.Join(sep, linkParts.Select(p => p.Split('|')[0]));
+            _lnkProfiles.Text = fullText;
+            int pos = 0;
+            foreach (var part in linkParts)
+            {
+                var split = part.Split('|');
+                int idx = fullText.IndexOf(split[0], pos, StringComparison.Ordinal);
+                _lnkProfiles.Links.Add(idx, split[0].Length, split[1]);
+                pos = idx + split[0].Length;
+            }
+            _lnkProfiles.Visible = true;
+        }
+        else
+        {
+            _lnkProfiles.Visible = false;
+        }
+
         _lblTypeBadge.Text = firm.RecordType ?? "Investment Advisor";
         _lblSourceBadge.Text = firm.Source ?? "SEC";
         _btnViewAdvisors.Enabled = !string.IsNullOrEmpty(firm.CrdNumber);
