@@ -96,6 +96,10 @@ public class DataSyncService : IDataSyncService
         if (errorCount > 0)
             summary += $" ({errorCount} skipped due to errors)";
         progress?.Report(summary);
+
+        _repo.ResolveAdvisorFirmLinks();
+        _repo.UpdateFirmAdvisorCounts();
+
         return new SyncResult(results, newCount, updatedCount);
     }
 
@@ -120,6 +124,7 @@ public class DataSyncService : IDataSyncService
         if (merged != null)
         {
             _repo.UpsertAdvisor(merged);
+            _repo.ResolveAdvisorFirmLinks();
             progress?.Report($"Advisor CRD #{crd} updated successfully.");
         }
 

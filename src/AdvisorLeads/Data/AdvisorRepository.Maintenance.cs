@@ -60,6 +60,21 @@ public partial class AdvisorRepository
     public void ResolveAdvisorFirmLinks()
     {
         using var ctx = CreateContext();
+
+        // Create stub firm records for any advisor CRDs referencing firms not yet in the DB.
+        // This ensures advisors whose firms weren't captured in the A-Z sweep still get linked.
+        ctx.Database.ExecuteSqlRaw(@"
+            INSERT OR IGNORE INTO Firms (CrdNumber, Name, Source, RecordType, CreatedAt, UpdatedAt)
+            SELECT DISTINCT a.CurrentFirmCrd, a.CurrentFirmName, 'Stub', 'Unknown',
+                   datetime('now'), datetime('now')
+            FROM Advisors a
+            WHERE a.CurrentFirmCrd IS NOT NULL AND a.CurrentFirmCrd != ''
+              AND a.CurrentFirmName IS NOT NULL AND a.CurrentFirmName != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM Firms f
+                  WHERE f.CrdNumber = a.CurrentFirmCrd
+              )");
+
         ctx.Database.ExecuteSqlRaw(@"
             UPDATE Advisors
             SET CurrentFirmId = (
