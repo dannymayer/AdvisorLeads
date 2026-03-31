@@ -63,6 +63,8 @@ public class EdgarSubmissionsService
                 progress?.Report($"Firm {firmCrd}: could not resolve CIK for SEC# {secNumber}.");
                 return 0;
             }
+
+            PersistCikToFirm(firmCrd, cik);
         }
 
         var paddedCik = cik.PadLeft(10, '0');
@@ -410,5 +412,21 @@ public class EdgarSubmissionsService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Persists a resolved CIK back to the Firm record so future lookups skip
+    /// the expensive 4-step resolution.
+    /// </summary>
+    private void PersistCikToFirm(string firmCrd, string cik)
+    {
+        try
+        {
+            using var ctx = new DatabaseContext(_dbPath);
+            ctx.Database.ExecuteSqlRaw(
+                "UPDATE Firms SET EdgarCik = {0}, UpdatedAt = datetime('now') WHERE CrdNumber = {1} AND (EdgarCik IS NULL OR EdgarCik = '')",
+                cik, firmCrd);
+        }
+        catch { }
     }
 }

@@ -13,6 +13,10 @@ namespace AdvisorLeads.Services;
 /// </summary>
 public class BackgroundDataService : IBackgroundDataService
 {
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "AdvisorLeads", "background-refresh.log");
+
     private readonly IFinraProvider _finra;
     private readonly SecCompilationService _sec;
     private readonly IAdvisorRepository _repo;
@@ -194,12 +198,14 @@ public class BackgroundDataService : IBackgroundDataService
             {
                 try
                 {
-                    var progress = new Progress<string>(_ => { }); // silent
+                    var progress = new Progress<string>(msg => LogBackground(msg));
+                    LogBackground("Background refresh cycle starting...");
                     await RefreshDataAsync(progress, token, activeOnly: isFirstRun);
+                    LogBackground("Background refresh cycle complete.");
                     isFirstRun = false;
                 }
                 catch (OperationCanceledException) { break; }
-                catch { /* log and continue */ }
+                catch (Exception ex) { LogBackground($"Refresh cycle error: {ex.Message}"); }
 
                 try { await Task.Delay(TimeSpan.FromMinutes(intervalMinutes), token); }
                 catch (OperationCanceledException) { break; }
@@ -255,7 +261,15 @@ public class BackgroundDataService : IBackgroundDataService
         // Analytics and data enrichment steps (ordered pipeline, phase 1)
         foreach (var step in _steps.Where(s => s.OrderIndex < 200).OrderBy(s => s.OrderIndex))
         {
-            await step.ExecuteAsync(progress, token);
+            try
+            {
+                await step.ExecuteAsync(progress, token);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                progress?.Report($"⚠ Step '{step.Name}' failed: {ex.Message}");
+            }
         }
 
         _repo.ResolveAdvisorFirmLinks();
@@ -265,7 +279,15 @@ public class BackgroundDataService : IBackgroundDataService
         // Post-processing enrichment steps (phase 2, after repo maintenance)
         foreach (var step in _steps.Where(s => s.OrderIndex >= 200).OrderBy(s => s.OrderIndex))
         {
-            await step.ExecuteAsync(progress, token);
+            try
+            {
+                await step.ExecuteAsync(progress, token);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                progress?.Report($"⚠ Step '{step.Name}' failed: {ex.Message}");
+            }
         }
 
         DataUpdated?.Invoke();
@@ -324,6 +346,17 @@ public class BackgroundDataService : IBackgroundDataService
         _cts?.Dispose();
         _cts = null;
         _refreshTask = null;
+    }
+
+    private static void LogBackground(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     /// <summary>

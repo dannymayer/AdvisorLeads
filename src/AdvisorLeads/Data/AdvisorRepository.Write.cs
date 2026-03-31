@@ -388,6 +388,10 @@ public partial class AdvisorRepository
             existing.IsInsuranceCompany = firm.IsInsuranceCompany ?? existing.IsInsuranceCompany;
             existing.BrokerProtocolMember = firm.BrokerProtocolMember;
             existing.BrokerProtocolUpdatedAt = firm.BrokerProtocolUpdatedAt;
+            existing.EdgarCik = !string.IsNullOrEmpty(firm.EdgarCik) ? firm.EdgarCik : existing.EdgarCik;
+            existing.SicCode = !string.IsNullOrEmpty(firm.SicCode) ? firm.SicCode : existing.SicCode;
+            existing.SicDescription = !string.IsNullOrEmpty(firm.SicDescription) ? firm.SicDescription : existing.SicDescription;
+            existing.FiscalYearEnd = !string.IsNullOrEmpty(firm.FiscalYearEnd) ? firm.FiscalYearEnd : existing.FiscalYearEnd;
             existing.UpdatedAt = DateTime.UtcNow;
             ctx.SaveChanges();
         }
